@@ -1,0 +1,132 @@
+name: Publish Wasm to GitHub Packages
+
+# Fork-only workflow: builds the web (wasmJs) artifacts of this branch and publishes
+# skiko, skiko-wasm-js and skiko-js-wasm-runtime to this repository's GitHub Packages
+# Maven registry under a "-fork.N" version. Consumers add
+#   maven("https://maven.pkg.github.com/<owner>/skiko") with a GitHub token
+# and force the three coordinates to that version.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.150.1-fork.1'
+        required: true
+        type: string
+      run_tests:
+        description: 'Run the wasmJs test suite before publishing'
+        required: false
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*-fork.*'
+
+env:
+  EMSDK_VERSION: '4.0.7'
+
+jobs:
+  publish-wasm:
+    name: 'Web Publish (GitHub Packages)'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        name: 'Check out code'
+
+      - name: 'Resolve version'
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-fork\.[0-9]+$ ]]; then
+            echo "::error::Version '$VERSION' must look like 0.150.1-fork.1"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION"
+
+      - uses: actions/setup-java@v4
+        name: 'Setup JDK 21'
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - uses: ./.github/actions/setup-prerequisites
+        name: 'Setup Prerequisites'
+
+      - uses: browser-actions/setup-chrome@v1
+        name: 'Setup Google Chrome'
+        if: ${{ inputs.run_tests != false }}
+        with:
+          chrome-version: stable
+
+      - name: 'Install Emscripten'
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libdbus-1-dev
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$HOME/emsdk/emsdk" activate "$EMSDK_VERSION"
+
+      - name: 'Run wasmJs tests'
+        if: ${{ inputs.run_tests != false }}
+        shell: bash
+        working-directory: skiko
+        run: |
+          source "$HOME/emsdk/emsdk_env.sh"
+          ./gradlew --no-daemon --stacktrace \
+            -Pskiko.wasm.enabled=true \
+            -Pskiko.awt.enabled=false \
+            -Pskiko.test.onci=true \
+            wasmJsTest
+
+      - uses: test-summary/action@v2
+        name: 'Test Summary'
+        if: ${{ always() && inputs.run_tests != false }}
+        with:
+          paths: "./skiko/build/test-results/**/TEST-*.xml"
+
+      - name: 'Publish to GitHub Packages'
+        shell: bash
+        working-directory: skiko
+        env:
+          COMPOSE_REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+          COMPOSE_REPO_USERNAME: ${{ github.actor }}
+          COMPOSE_REPO_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source "$HOME/emsdk/emsdk_env.sh"
+          ./gradlew --no-daemon --stacktrace \
+            -Pskiko.wasm.enabled=true \
+            -Pskiko.awt.enabled=false \
+            -Pdeploy.version="${{ steps.version.outputs.version }}" \
+            -Pdeploy.release=true \
+            publishToComposeRepo
+
+      - name: 'Summary'
+        shell: bash
+        run: |
+          {
+            echo "## Published ${{ steps.version.outputs.version }}"
+            echo
+            echo '```kotlin'
+            echo 'repositories {'
+            echo '    maven("https://maven.pkg.github.com/${{ github.repository }}") {'
+            echo '        credentials { username = <github user>; password = <token with read:packages> }'
+            echo '    }'
+            echo '}'
+            echo 'configurations.configureEach {'
+            echo '    resolutionStrategy {'
+            echo '        force("org.jetbrains.skiko:skiko:${{ steps.version.outputs.version }}")'
+            echo '        force("org.jetbrains.skiko:skiko-wasm-js:${{ steps.version.outputs.version }}")'
+            echo '        force("org.jetbrains.skiko:skiko-js-wasm-runtime:${{ steps.version.outputs.version }}")'
+            echo '    }'
+            echo '}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
