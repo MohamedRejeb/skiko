@@ -16,11 +16,29 @@ import org.jetbrains.skiko.tests.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 
 class CanvasTest {
+
+    @Test
+    fun surfaceOfRasterSurfaceCanvasIsThatSurface() {
+        val surface = Surface.makeRasterN32Premul(8, 8)
+
+        val canvasSurface = surface.canvas.surface
+
+        assertNotNull(canvasSurface)
+        assertEquals(surface, canvasSurface)
+    }
+
+    @Test
+    fun surfaceOfBitmapCanvasIsNull() {
+        val bitmap = Bitmap().apply { allocPixels(ImageInfo.makeN32Premul(8, 8)) }
+
+        assertNull(Canvas(bitmap).surface)
+    }
 
     @Test
     fun recordingContextOfRasterSurfaceCanvasIsNull() {
@@ -30,7 +48,7 @@ class CanvasTest {
     }
 
     @Test
-    fun recordingContextOfRenderTargetCanvasIsItsContext() {
+    fun renderTargetCanvasExposesItsContextAndSurface() {
         if (!TestGlContext.isAvailable()) return
 
         if (hostOs == OS.Linux && kotlinBackend == KotlinBackend.Native && hostArch == Arch.Arm64) {
@@ -42,6 +60,10 @@ class CanvasTest {
                 val surface = Surface.makeRenderTarget(ctx, budgeted = false, ImageInfo.makeN32Premul(16, 16))
 
                 assertEquals(ctx, surface.canvas.recordingContext)
+
+                val canvasSurface = surface.canvas.surface
+                assertEquals(surface, canvasSurface)
+                assertEquals(ctx, canvasSurface!!._context)
             }
         }
     }

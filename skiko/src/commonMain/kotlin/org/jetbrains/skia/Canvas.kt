@@ -1539,6 +1539,26 @@ open class Canvas internal constructor(ptr: NativePointer, managed: Boolean, int
         }
 
     /**
+     * Returns the Surface this Canvas draws into, if any.
+     *
+     * Canvases obtained from [Surface.canvas] return that surface. Canvases that draw into
+     * a [Bitmap], a [Picture] recording or a document return null.
+     *
+     * For a GPU-backed surface the returned Surface carries the canvas's [recordingContext],
+     * so [Surface.flush] and [Surface.flushAndSubmit] work on it.
+     *
+     * @return the Surface backing this Canvas, or null
+     */
+    val surface: Surface?
+        get() = try {
+            Stats.onNativeCall()
+            val ptr = _nGetSurface(_ptr)
+            if (ptr == NullPointer) null else Surface(ptr, recordingContext)
+        } finally {
+            reachabilityBarrier(this)
+        }
+
+    /**
      * Returns the DirectContext this Canvas records into, if any.
      *
      * Non-null for canvases of GPU-backed surfaces, for example one created with
@@ -1870,6 +1890,9 @@ private external fun _nRestore(ptr: NativePointer)
 
 @ExternalSymbolName("org_jetbrains_skia_Canvas__1nRestoreToCount")
 private external fun _nRestoreToCount(ptr: NativePointer, saveCount: Int)
+
+@ExternalSymbolName("org_jetbrains_skia_Canvas__1nGetSurface")
+private external fun _nGetSurface(ptr: NativePointer): NativePointer
 
 @ExternalSymbolName("org_jetbrains_skia_Canvas__1nGetRecordingContext")
 private external fun _nGetRecordingContext(ptr: NativePointer): NativePointer
