@@ -1538,6 +1538,27 @@ open class Canvas internal constructor(ptr: NativePointer, managed: Boolean, int
             reachabilityBarrier(this)
         }
 
+    /**
+     * Returns the DirectContext this Canvas records into, if any.
+     *
+     * Non-null for canvases of GPU-backed surfaces, for example one created with
+     * [Surface.makeRenderTarget]; null for raster surfaces, bitmaps, picture recording and
+     * deferred (non-direct) recording contexts.
+     * The context is shared with the surface, so drawing into another
+     * [Surface.makeRenderTarget] on it and drawing the resulting [Image] into this Canvas
+     * stays on the GPU.
+     *
+     * @return the recording context, if available; null otherwise
+     */
+    val recordingContext: DirectContext?
+        get() = try {
+            Stats.onNativeCall()
+            val ptr = _nGetRecordingContext(_ptr)
+            if (ptr == NullPointer) null else DirectContext(ptr)
+        } finally {
+            reachabilityBarrier(this)
+        }
+
     fun restore(): Canvas {
         Stats.onNativeCall()
         _nRestore(_ptr)
@@ -1849,6 +1870,9 @@ private external fun _nRestore(ptr: NativePointer)
 
 @ExternalSymbolName("org_jetbrains_skia_Canvas__1nRestoreToCount")
 private external fun _nRestoreToCount(ptr: NativePointer, saveCount: Int)
+
+@ExternalSymbolName("org_jetbrains_skia_Canvas__1nGetRecordingContext")
+private external fun _nGetRecordingContext(ptr: NativePointer): NativePointer
 
 internal inline fun Canvas.runRestoringState(block: Canvas.() -> Unit) {
     val restoreCount = save()

@@ -1,5 +1,6 @@
 #include <iostream>
 #include "SkCanvas.h"
+#include "ganesh/GrDirectContext.h"
 #include "SkRRect.h"
 #include "SkTextBlob.h"
 #include "SkVertices.h"
@@ -361,4 +362,12 @@ SKIKO_EXPORT void org_jetbrains_skia_Canvas__1nRestore(KNativePointer ptr) {
 
 SKIKO_EXPORT void org_jetbrains_skia_Canvas__1nRestoreToCount(KNativePointer ptr, KInt saveCount) {
     reinterpret_cast<SkCanvas*>((ptr))->restoreToCount(saveCount);
+}
+
+SKIKO_EXPORT KNativePointer org_jetbrains_skia_Canvas__1nGetRecordingContext(KNativePointer ptr) {
+    SkCanvas* canvas = reinterpret_cast<SkCanvas*>((ptr));
+    GrRecordingContext* recordingContext = canvas->recordingContext();
+    GrDirectContext* context = recordingContext ? recordingContext->asDirectContext() : nullptr;
+    SkSafeRef(context);
+    return reinterpret_cast<KNativePointer>(context);
 }
