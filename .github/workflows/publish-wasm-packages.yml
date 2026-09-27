@@ -62,7 +62,7 @@ jobs:
 
       - uses: browser-actions/setup-chrome@v1
         name: 'Setup Google Chrome'
-        if: ${{ inputs.run_tests != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
         with:
           chrome-version: stable
 
@@ -76,7 +76,7 @@ jobs:
           "$HOME/emsdk/emsdk" activate "$EMSDK_VERSION"
 
       - name: 'Run wasmJs tests'
-        if: ${{ inputs.run_tests != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
         shell: bash
         working-directory: skiko
         run: |
@@ -89,7 +89,7 @@ jobs:
 
       - uses: test-summary/action@v2
         name: 'Test Summary'
-        if: ${{ always() && inputs.run_tests != false }}
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_tests) }}
         with:
           paths: "./skiko/build/test-results/**/TEST-*.xml"
 
