@@ -1,0 +1,225 @@
+name: Publish Desktop to GitHub Packages
+
+# Fork-only workflow: builds the desktop (AWT) artifacts of this branch and publishes skiko,
+# skiko-awt, skiko-awt-runtime and the skiko-awt-runtime-<os>-<arch> native runtimes to this
+# repository's GitHub Packages Maven registry under a "-fork.N" version. Push a
+# "desktop-v<version>" tag, e.g. desktop-v0.150.1-fork.2, to run it. Consumers add
+#   maven("https://maven.pkg.github.com/<owner>/skiko") with a GitHub token
+# and force org.jetbrains.skiko:skiko-awt to that version; its constraints bring the runtimes.
+#
+# Each job publishes its own artifacts, so a failed job can be re-run on its own.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.150.1-fork.2'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'desktop-v*-fork.*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  version:
+    name: 'Resolve version'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: 'Resolve version'
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME#desktop-v}"
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-fork\.[0-9]+$ ]]; then
+            echo "::error::Version '$VERSION' must look like 0.150.1-fork.2"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION"
+
+  macos:
+    name: 'macOS: skiko, skiko-awt and the macOS runtimes'
+    needs: version
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        name: 'Check out code'
+
+      - uses: actions/setup-java@v4
+        name: 'Setup JDK 21'
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - uses: ./.github/actions/setup-prerequisites
+        name: 'Setup Prerequisites'
+
+      - name: 'Publish skiko, skiko-awt, skiko-awt-runtime and the macos-arm64 runtime'
+        shell: bash
+        working-directory: skiko
+        env:
+          COMPOSE_REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+          COMPOSE_REPO_USERNAME: ${{ github.actor }}
+          COMPOSE_REPO_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            -Pskiko.awt.enabled=true \
+            -Pskiko.arch=arm64 \
+            -Pdeploy.version="${{ needs.version.outputs.version }}" \
+            -Pdeploy.release=true \
+            publishKotlinMultiplatformPublicationToComposeRepoRepository \
+            publishAwtPublicationToComposeRepoRepository \
+            publishAwtRuntimeElementsPublicationToComposeRepoRepository \
+            publishSkikoJvmRuntimeMacosArm64PublicationToComposeRepoRepository
+
+      - name: 'Publish the macos-x64 runtime'
+        shell: bash
+        working-directory: skiko
+        env:
+          COMPOSE_REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+          COMPOSE_REPO_USERNAME: ${{ github.actor }}
+          COMPOSE_REPO_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            -Pskiko.awt.enabled=true \
+            -Pskiko.arch=x64 \
+            -Pdeploy.version="${{ needs.version.outputs.version }}" \
+            -Pdeploy.release=true \
+            publishSkikoJvmRuntimeMacosX64PublicationToComposeRepoRepository
+
+  windows:
+    name: 'Windows: the Windows runtimes'
+    needs: version
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        name: 'Check out code'
+
+      - uses: microsoft/setup-msbuild@v1
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - uses: actions/setup-java@v4
+        name: 'Setup JDK 21'
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - uses: ./.github/actions/setup-prerequisites
+        name: 'Setup Prerequisites'
+
+      - name: 'Publish the windows-x64 runtime'
+        shell: bash
+        working-directory: skiko
+        env:
+          COMPOSE_REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+          COMPOSE_REPO_USERNAME: ${{ github.actor }}
+          COMPOSE_REPO_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            -Pskiko.awt.enabled=true \
+            -Pskiko.arch=x64 \
+            -Pdeploy.version="${{ needs.version.outputs.version }}" \
+            -Pdeploy.release=true \
+            publishSkikoJvmRuntimeWindowsX64PublicationToComposeRepoRepository
+
+      - name: 'Publish the windows-arm64 runtime'
+        shell: bash
+        working-directory: skiko
+        env:
+          COMPOSE_REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+          COMPOSE_REPO_USERNAME: ${{ github.actor }}
+          COMPOSE_REPO_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            -Pskiko.awt.enabled=true \
+            -Pskiko.arch=arm64 \
+            -Pdeploy.version="${{ needs.version.outputs.version }}" \
+            -Pdeploy.release=true \
+            publishSkikoJvmRuntimeWindowsArm64PublicationToComposeRepoRepository
+
+  linux:
+    name: 'Linux: the linux-${{ matrix.arch }} runtime'
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+            publication: LinuxX64
+          # Cross-compiling arm64 on x64 fails, so it builds on an arm64 runner
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            publication: LinuxArm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'Check out code'
+
+      - uses: ./.github/actions/setup-prerequisites
+        name: 'Setup Prerequisites'
+
+      # The runtime is built in the linux-compat image, so it runs on older glibc versions
+      - uses: ./.github/actions/docker-skiko-publish
+        name: 'Build the linux-compat image'
+        with:
+          image_name: linux-compat
+          tag: desktop-publish
+          load: true
+          should_publish: false
+
+      - name: 'Publish the linux-${{ matrix.arch }} runtime'
+        shell: bash
+        env:
+          COMPOSE_REPO_URL: https://maven.pkg.github.com/${{ github.repository }}
+          COMPOSE_REPO_USERNAME: ${{ github.actor }}
+          COMPOSE_REPO_KEY: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/workspace \
+            -v "${HOME}/.gradle":/gradle-cache \
+            -e GRADLE_USER_HOME=/gradle-cache \
+            -e COMPOSE_REPO_URL \
+            -e COMPOSE_REPO_USERNAME \
+            -e COMPOSE_REPO_KEY \
+            -w /workspace/skiko \
+            "ghcr.io/${GITHUB_REPOSITORY,,}/linux-compat:desktop-publish" \
+            bash -c './gradlew --no-daemon --stacktrace \
+              -Pskiko.awt.enabled=true \
+              -Pskiko.arch=${{ matrix.arch }} \
+              -Pdeploy.version=${{ needs.version.outputs.version }} \
+              -Pdeploy.release=true \
+              publishSkikoJvmRuntime${{ matrix.publication }}PublicationToComposeRepoRepository'
+
+  summary:
+    name: 'Summary'
+    needs: [version, macos, windows, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'Summary'
+        shell: bash
+        run: |
+          {
+            echo "## Published ${{ needs.version.outputs.version }}"
+            echo
+            echo '```kotlin'
+            echo 'repositories {'
+            echo '    maven("https://maven.pkg.github.com/${{ github.repository }}") {'
+            echo '        credentials { username = <github user>; password = <token with read:packages> }'
+            echo '    }'
+            echo '}'
+            echo 'configurations.configureEach {'
+            echo '    resolutionStrategy.force("org.jetbrains.skiko:skiko-awt:${{ needs.version.outputs.version }}")'
+            echo '}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
