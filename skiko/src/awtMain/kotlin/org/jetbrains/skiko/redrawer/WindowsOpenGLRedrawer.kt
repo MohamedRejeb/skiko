@@ -209,11 +209,15 @@ private class LateFrameStart {
 
         var vblank = now + timing[0]
         // One frame per vblank, and none for a vblank it can't be ready for
-        if (vblank - lastVblank < period / 2 || vblank - now < render) vblank += period
+        val sameAsLast = vblank - lastVblank < period / 2
+        val tooLate = vblank - now < render
+        if (sameAsLast || tooLate) vblank += period
         val previousVblank = lastVblank
         lastVblank = vblank
 
         val start = vblank - lead
+        if (trace) println("[late] now=%.3f toNext=%.2f render=%.2f lead=%.2f same=%b late=%b target=+%.2f wait=%.2f".format(
+            now / 1e6, timing[0] / 1e6, render / 1e6, lead / 1e6, sameAsLast, tooLate, (vblank - now) / 1e6, (start - now) / 1e6))
         if (start - System.nanoTime() > MIN_WAIT_NANOS) {
             val skipped = withContext(dispatcherToBlockOn) {
                 // In slices, so a skipped wait ends within one
@@ -261,6 +265,7 @@ private class LateFrameStart {
 
         val marginNanos = ((System.getProperty("skiko.windows.lateFrameStart.marginMs")?.toDoubleOrNull() ?: 2.0) * 1e6).toLong()
         val percentile = (System.getProperty("skiko.windows.lateFrameStart.percentile")?.toIntOrNull() ?: 90).coerceIn(50, 100)
+        val trace = System.getProperty("skiko.windows.lateFrameStart.trace") == "true"
     }
 }
 
