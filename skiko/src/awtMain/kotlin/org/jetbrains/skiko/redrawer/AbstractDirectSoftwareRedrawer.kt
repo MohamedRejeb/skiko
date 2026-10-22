@@ -14,10 +14,13 @@ internal abstract class AbstractDirectSoftwareRedrawer(
     private val contextHandler = DirectSoftwareContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
 
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
+
     private val frameJob = Job()
     private val frameLimiter = layerFrameLimiter(CoroutineScope(frameJob), layer.backedLayer)
     private val frameDispatcher = FrameDispatcher(MainUIDispatcher) {
-        if (properties.isVsyncEnabled && properties.isVsyncFramelimitFallbackEnabled) {
+        if (isFrameThrottlingEnabled && properties.isVsyncFramelimitFallbackEnabled) {
             frameLimiter.awaitNextFrame()
         }
 
@@ -31,6 +34,10 @@ internal abstract class AbstractDirectSoftwareRedrawer(
 
     override fun needRender(throttledToVsync: Boolean) {
         frameDispatcher.scheduleFrame()
+    }
+
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
     }
 
     protected open fun draw() = inDrawScope { contextHandler.draw() }

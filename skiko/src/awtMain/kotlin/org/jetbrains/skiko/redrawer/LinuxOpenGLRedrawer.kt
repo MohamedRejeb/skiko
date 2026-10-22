@@ -7,7 +7,7 @@ import org.jetbrains.skiko.context.OpenGLContextHandler
 internal class LinuxOpenGLRedrawer(
     private val layer: SkiaLayer,
     analytics: SkiaLayerAnalytics,
-    private val properties: SkiaLayerProperties
+    properties: SkiaLayerProperties
 ) : AWTRedrawer(layer, analytics, GraphicsApi.OPENGL) {
     init {
         loadOpenGLLibrary()
@@ -17,7 +17,10 @@ internal class LinuxOpenGLRedrawer(
     override val renderInfo: String get() = contextHandler.rendererInfo()
 
     private var context = 0L
-    private val swapInterval = if (properties.isVsyncEnabled) 1 else 0
+
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
+    private val swapInterval get() = if (isFrameThrottlingEnabled) 1 else 0
 
     init {
     	layer.backedLayer.lockLinuxDrawingSurface {
@@ -50,7 +53,7 @@ internal class LinuxOpenGLRedrawer(
 
     private suspend fun limitFramesIfNeeded() {
         // Some Linuxes don't turn vsync on, so we apply additional frame limit (which should be no longer than enabled vsync)
-        if (properties.isVsyncEnabled) {
+        if (isFrameThrottlingEnabled) {
             try {
                 frameLimiter.awaitNextFrame()
             } catch (e: CancellationException) {
@@ -78,13 +81,17 @@ internal class LinuxOpenGLRedrawer(
         frameDispatcher.scheduleFrame()
     }
 
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
+    }
+
     override fun renderImmediately() = layer.backedLayer.lockLinuxDrawingSurface {
         checkDisposed()
         update()
         inDrawScope {
             it.makeCurrent(context)
             contextHandler.draw()
-            val turnOfVsync = properties.isVsyncEnabled && !SkikoProperties.linuxWaitForVsyncOnRedrawImmediately
+            val turnOfVsync = isFrameThrottlingEnabled && !SkikoProperties.linuxWaitForVsyncOnRedrawImmediately
             if (turnOfVsync) {
                 it.setSwapInterval(0)
             }
@@ -139,7 +146,7 @@ internal class LinuxOpenGLRedrawer(
                 // Synchronize with vsync only for the fastest monitor, for the single window.
                 // Otherwise, 5 windows will wait for vsync 5 times.
                 val vsyncRedrawer = toRedrawVisible
-                    .filter { it.properties.isVsyncEnabled }
+                    .filter { it.isFrameThrottlingEnabled }
                     .maxByOrNull { it.frameLimit }
 
                 for (redrawer in toRedrawVisible.filter { it != vsyncRedrawer }) {

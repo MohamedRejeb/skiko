@@ -60,7 +60,24 @@ internal class MetalRedrawer(
         }
 
     private val adapter = chooseMetalAdapter(properties.adapterPriority)
-    private val vSyncer = if (properties.isVsyncEnabled) MetalVSyncer(layer.windowHandle) else null
+
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
+
+    @Volatile
+    private var isPresentSyncEnabled = properties.isVsyncEnabled
+
+    // With display sync, frames presented faster than the display refreshes are lost,
+    // so throttling stays on while present sync is on
+    private val waitsForVsync: Boolean
+        get() = isFrameThrottlingEnabled || isPresentSyncEnabled
+
+    // Its display link fires on every refresh while it exists, so it is created once vsync is needed.
+    // Created and used on the event dispatch thread.
+    private var vSyncer: MetalVSyncer? = if (waitsForVsync) MetalVSyncer(layer.windowHandle) else null
+
+    private fun vSyncerIfNeeded(): MetalVSyncer? =
+        if (waitsForVsync) vSyncer ?: MetalVSyncer(layer.windowHandle).also { vSyncer = it } else null
 
     private val windowOcclusionStateChannel = Channel<Boolean>(Channel.CONFLATED)
     @Volatile private var isWindowOccluded = false
@@ -99,6 +116,17 @@ internal class MetalRedrawer(
         frameDispatcher.scheduleFrame(needUpdate = true, throttledToVsync = throttledToVsync)
     }
 
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
+    }
+
+    override fun setPresentSyncEnabled(enabled: Boolean) {
+        checkDisposed()
+        if (enabled == isPresentSyncEnabled) return
+        isPresentSyncEnabled = enabled
+        setDisplaySyncEnabled(device.ptr, enabled)
+    }
+
     override fun renderImmediately() {
         checkDisposed()
         update()
@@ -108,8 +136,11 @@ internal class MetalRedrawer(
                 // Trying to draw immediately in Metal will result in lost (undrawn)
                 // frames if there are more than two between consecutive vsync events.
                 if (SkikoProperties.macOSWaitForPreviousFrameVsyncOnRedrawImmediately) {
-                    runBlocking {
-                        vSyncer?.waitForVSync()
+                    val vSyncer = vSyncerIfNeeded()
+                    if (vSyncer != null) {
+                        runBlocking {
+                            vSyncer.waitForVSync()
+                        }
                     }
                 }
             }
@@ -205,7 +236,7 @@ internal class MetalRedrawer(
                 updateIfRequested()
                 draw()
             }
-            vSyncer?.waitForVSync()
+            vSyncerIfNeeded()?.waitForVSync()
         }
 
         fun scheduleFrame(needUpdate: Boolean, throttledToVsync: Boolean) {

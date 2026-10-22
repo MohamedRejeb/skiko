@@ -12,7 +12,7 @@ import org.jetbrains.skiko.context.Direct3DContextHandler
 internal class Direct3DRedrawer(
     private val layer: SkiaLayer,
     analytics: SkiaLayerAnalytics,
-    private val properties: SkiaLayerProperties
+    properties: SkiaLayerProperties
 ) : AWTRedrawer(layer, analytics, GraphicsApi.DIRECT3D) {
 
     private val contextHandler = Direct3DContextHandler(layer)
@@ -20,6 +20,9 @@ internal class Direct3DRedrawer(
 
     private var drawLock = Any()
     private var isSwapChainInitialized = false
+
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
 
     private var device: Long = 0L
         get() {
@@ -68,6 +71,10 @@ internal class Direct3DRedrawer(
         frameDispatcher.scheduleFrame()
     }
 
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
+    }
+
     override fun renderImmediately() {
         checkDisposed()
         update()
@@ -81,7 +88,7 @@ internal class Direct3DRedrawer(
     private suspend fun draw() {
         inDrawScope {
             withContext(dispatcherToBlockOn) {
-                drawAndSwap(withVsync = properties.isVsyncEnabled)
+                drawAndSwap(withVsync = isFrameThrottlingEnabled)
             }
         }
     }

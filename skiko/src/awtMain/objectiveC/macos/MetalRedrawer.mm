@@ -235,7 +235,12 @@ JNIEXPORT void JNICALL Java_org_jetbrains_skiko_redrawer_MetalRedrawer_setDispla
 {
     @autoreleasepool {
         MetalDevice *device = (__bridge MetalDevice *) (void *) devicePtr;
+        // Called from the AWT thread, which has no run loop to commit an implicit transaction
+        [CATransaction begin];
+        [CATransaction setValue:(id)kCFBooleanTrue forKey:kCATransactionDisableActions];
         device.layer.displaySyncEnabled = enabled;
+        [CATransaction commit];
+        [CATransaction flush];
     }
 }
 

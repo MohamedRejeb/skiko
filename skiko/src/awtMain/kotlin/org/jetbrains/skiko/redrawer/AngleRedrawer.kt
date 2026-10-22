@@ -8,7 +8,7 @@ import org.jetbrains.skiko.context.AngleContextHandler
 internal class AngleRedrawer(
     private val layer: SkiaLayer,
     analytics: SkiaLayerAnalytics,
-    private val properties: SkiaLayerProperties
+    properties: SkiaLayerProperties
 ) : AWTRedrawer(layer, analytics, GraphicsApi.ANGLE) {
     init {
         try {
@@ -22,6 +22,9 @@ internal class AngleRedrawer(
     override val renderInfo: String get() = contextHandler.rendererInfo()
 
     private var drawLock = Any()
+
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
 
     private var device: Long = 0L
         get() {
@@ -68,6 +71,10 @@ internal class AngleRedrawer(
         frameDispatcher.scheduleFrame()
     }
 
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
+    }
+
     override fun renderImmediately() {
         checkDisposed()
         update()
@@ -80,7 +87,7 @@ internal class AngleRedrawer(
 
     private fun draw() {
         inDrawScope {
-            drawAndSwap(withVsync = properties.isVsyncEnabled)
+            drawAndSwap(withVsync = isFrameThrottlingEnabled)
         }
     }
 

@@ -345,6 +345,9 @@ actual open class SkiaLayer internal constructor(
         redrawerFactory = { renderApi, oldRedrawer ->
             oldRedrawer?.dispose()
             renderFactory.createRedrawer(this, renderApi, analytics, properties).also {
+                // properties hold the initial values, the layer's switches may have changed since
+                it.setFrameThrottlingEnabled(isFrameThrottlingEnabled)
+                it.setPresentSyncEnabled(isPresentSyncEnabled)
                 it.syncBounds()
             }
         },
@@ -356,6 +359,48 @@ actual open class SkiaLayer internal constructor(
     internal val redrawer: Redrawer? by redrawerManager::redrawer
 
     actual var renderApi: GraphicsApi by redrawerManager::renderApi
+
+    /**
+     * Whether the layer waits for vsync between frames, which limits rendering to the display refresh rate.
+     * With graphics APIs other than Metal this is the only vsync switch.
+     *
+     * With Metal, throttling stays on while [isPresentSyncEnabled] is on, because presenting several frames
+     * per refresh with display sync drops frames.
+     *
+     * Starts from [SkiaLayerProperties.isVsyncEnabled], which keeps that initial value.
+     * Must be set from the AWT event dispatch thread.
+     */
+    var isFrameThrottlingEnabled: Boolean = properties.isVsyncEnabled
+        set(value) {
+            check(isEventDispatchThread()) { "Method should be called from AWT event dispatch thread" }
+            field = value
+            redrawer?.setFrameThrottlingEnabled(value)
+        }
+
+    /**
+     * Whether a presented frame waits for the next display refresh before it reaches the screen
+     * (`CAMetalLayer.displaySyncEnabled`). Turning it off lowers latency, with possible tearing.
+     * Only has an effect with Metal.
+     *
+     * Starts from [SkiaLayerProperties.isVsyncEnabled], which keeps that initial value.
+     * Must be set from the AWT event dispatch thread.
+     */
+    var isPresentSyncEnabled: Boolean = properties.isVsyncEnabled
+        set(value) {
+            check(isEventDispatchThread()) { "Method should be called from AWT event dispatch thread" }
+            field = value
+            redrawer?.setPresentSyncEnabled(value)
+        }
+
+    /**
+     * Sets both [isFrameThrottlingEnabled] and [isPresentSyncEnabled]. Reads `true` only when both are on.
+     */
+    var isVsyncEnabled: Boolean
+        get() = isFrameThrottlingEnabled && isPresentSyncEnabled
+        set(value) {
+            isFrameThrottlingEnabled = value
+            isPresentSyncEnabled = value
+        }
 
     val renderInfo: String
         get() = if (redrawer == null)

@@ -17,13 +17,18 @@ internal class SoftwareRedrawer(
     private val contextHandler = SoftwareContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
 
-    private val frameJob = if (properties.isVsyncEnabled && properties.isVsyncFramelimitFallbackEnabled) Job() else null
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
+
+    private val frameJob = if (properties.isVsyncFramelimitFallbackEnabled) Job() else null
     private val frameLimiter = frameJob?.let {
         layerFrameLimiter(CoroutineScope(it), layer.backedLayer)
     }
 
     private val frameDispatcher = FrameDispatcher(MainUIDispatcher) {
-        frameLimiter?.awaitNextFrame()
+        if (isFrameThrottlingEnabled) {
+            frameLimiter?.awaitNextFrame()
+        }
 
         if (layer.isShowing) {
             update()
@@ -44,6 +49,10 @@ internal class SoftwareRedrawer(
 
     override fun needRender(throttledToVsync: Boolean) {
         frameDispatcher.scheduleFrame()
+    }
+
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
     }
 
     override fun renderImmediately() {

@@ -7,11 +7,14 @@ import org.jetbrains.skiko.context.OpenGLContextHandler
 internal class WindowsOpenGLRedrawer(
     private val layer: SkiaLayer,
     analytics: SkiaLayerAnalytics,
-    private val properties: SkiaLayerProperties
+    properties: SkiaLayerProperties
 ) : AWTRedrawer(layer, analytics, GraphicsApi.OPENGL) {
     init {
         loadOpenGLLibrary()
     }
+
+    @Volatile
+    private var isFrameThrottlingEnabled = properties.isVsyncEnabled
 
     private val contextHandler = OpenGLContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
@@ -59,6 +62,10 @@ internal class WindowsOpenGLRedrawer(
         check(!isDisposed) { "WindowsOpenGLRedrawer is disposed" }
         toRedraw.add(this)
         frameDispatcher.scheduleFrame()
+    }
+
+    override fun setFrameThrottlingEnabled(enabled: Boolean) {
+        isFrameThrottlingEnabled = enabled
     }
 
     override fun renderImmediately() {
@@ -119,7 +126,7 @@ internal class WindowsOpenGLRedrawer(
                 OpenGLApi.instance.glFinish()
             }
 
-            val isVsyncEnabled = toRedrawVisible.all { it.properties.isVsyncEnabled }
+            val isVsyncEnabled = toRedrawVisible.all { it.isFrameThrottlingEnabled }
             if (isVsyncEnabled) {
                 withContext(dispatcherToBlockOn) {
                     dwmFlush() // wait for vsync
