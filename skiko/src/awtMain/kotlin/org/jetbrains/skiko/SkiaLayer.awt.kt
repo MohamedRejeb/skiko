@@ -409,6 +409,14 @@ actual open class SkiaLayer internal constructor(
         }
 
     /**
+     * Makes the frame waiting for its late start, or the next frame, start at once: for input that
+     * shouldn't wait for the end of the refresh, like a pen touching down. See [isLateFrameStartEnabled].
+     */
+    fun skipLateFrameStart() {
+        redrawer?.skipLateFrameStart()
+    }
+
+    /**
      * Sets both [isFrameThrottlingEnabled] and [isPresentSyncEnabled]. Reads `true` only when both are on.
      */
     var isVsyncEnabled: Boolean

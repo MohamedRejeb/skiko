@@ -75,6 +75,10 @@ internal class WindowsOpenGLRedrawer(
         isLateFrameStartEnabled = enabled
     }
 
+    override fun skipLateFrameStart() {
+        lateFrameStart.skipNext()
+    }
+
     override fun renderImmediately() {
         check(!isDisposed) { "WindowsOpenGLRedrawer is disposed" }
         update()
@@ -173,12 +177,24 @@ private class LateFrameStart {
     // Half of MIN_VALUE: subtracting it from a nanoTime can't overflow
     private var lastVblank = Long.MIN_VALUE / 2
 
+    @Volatile
+    private var skipRequested = false
+
+    /** Ends the current wait, or the next one, at once: for input that shouldn't wait, like a pen press. Any thread. */
+    fun skipNext() {
+        skipRequested = true
+    }
+
     /**
      * Waits for the frame's start time. Returns false, without waiting, when DWM has no vblank timing;
      * the frame then waits for vsync after it is presented instead.
      */
     suspend fun await(): Boolean {
         if (!dwmVblankTiming(timing)) return false
+        if (skipRequested) {
+            skipRequested = false
+            return true
+        }
         val now = System.nanoTime()
         val period = timing[1]
         val render = expectedRenderNanos()
@@ -188,11 +204,25 @@ private class LateFrameStart {
         var vblank = now + timing[0]
         // One frame per vblank, and none for a vblank it can't be ready for
         if (vblank - lastVblank < period / 2 || vblank - now < render) vblank += period
+        val previousVblank = lastVblank
         lastVblank = vblank
 
-        val wait = vblank - lead - System.nanoTime()
-        if (wait > MIN_WAIT_NANOS) {
-            withContext(dispatcherToBlockOn) { sleepPrecisely(wait) }
+        val start = vblank - lead
+        if (start - System.nanoTime() > MIN_WAIT_NANOS) {
+            val skipped = withContext(dispatcherToBlockOn) {
+                // In slices, so a skipped wait ends within one
+                while (!skipRequested) {
+                    val left = start - System.nanoTime()
+                    if (left <= 0) return@withContext false
+                    sleepPrecisely(minOf(left, SKIP_CHECK_NANOS))
+                }
+                true
+            }
+            if (skipped) {
+                skipRequested = false
+                // Started early, so a later frame may still make this vblank
+                lastVblank = previousVblank
+            }
         }
         return true
     }
@@ -214,6 +244,7 @@ private class LateFrameStart {
         const val DEFAULT_RENDER_NANOS = 4_000_000L
         const val MIN_WAIT_NANOS = 200_000L
         const val MIN_SLACK_NANOS = 1_000_000L
+        const val SKIP_CHECK_NANOS = 1_000_000L
 
         val marginNanos = ((System.getProperty("skiko.windows.lateFrameStart.marginMs")?.toDoubleOrNull() ?: 2.0) * 1e6).toLong()
         val percentile = (System.getProperty("skiko.windows.lateFrameStart.percentile")?.toIntOrNull() ?: 90).coerceIn(50, 100)

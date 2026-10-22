@@ -31,6 +31,9 @@ internal interface Redrawer {
      * Only redrawers that know when the next vblank is (Windows OpenGL) use it.
      */
     fun setLateFrameStartEnabled(enabled: Boolean) = Unit
+
+    /** Makes the frame waiting for its late start, or the next one, start at once. */
+    fun skipLateFrameStart() = Unit
     val renderInfo: String
     fun isTransparentBackgroundSupported(): Boolean
 }
