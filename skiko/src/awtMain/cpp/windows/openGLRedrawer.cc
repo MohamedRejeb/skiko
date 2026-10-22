@@ -108,4 +108,49 @@ extern "C"
     {
         DwmFlush();
     }
+
+    // Writes the nanoseconds from now until the next vblank DWM composes at, and the refresh period,
+    // into timing[0] and timing[1]. Returns false when DWM has no timing.
+    JNIEXPORT jboolean JNICALL Java_org_jetbrains_skiko_redrawer_WindowsOpenGLRedrawerKt_dwmVblankTiming(JNIEnv *env, jobject redrawer, jlongArray timing)
+    {
+        DWM_TIMING_INFO info = {};
+        info.cbSize = sizeof(info);
+        if (FAILED(DwmGetCompositionTimingInfo(NULL, &info)) || info.qpcRefreshPeriod == 0) {
+            return JNI_FALSE;
+        }
+        LARGE_INTEGER now, frequency;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&frequency);
+        LONGLONG period = (LONGLONG) info.qpcRefreshPeriod;
+        LONGLONG next = (LONGLONG) info.qpcVBlank;
+        if (next <= now.QuadPart) {
+            next += ((now.QuadPart - next) / period + 1) * period;
+        }
+        jlong values[2] = {
+            (jlong) ((double) (next - now.QuadPart) * 1e9 / (double) frequency.QuadPart),
+            (jlong) ((double) period * 1e9 / (double) frequency.QuadPart),
+        };
+        env->SetLongArrayRegion(timing, 0, 2, values);
+        return JNI_TRUE;
+    }
+
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+    // Sleeps with sub-millisecond precision. Sleep() and Java's parkNanos wake on the system tick,
+    // 15.6 ms unless some process raised the timer resolution.
+    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_redrawer_WindowsOpenGLRedrawerKt_sleepPrecisely(JNIEnv *env, jobject redrawer, jlong nanos)
+    {
+        static thread_local HANDLE timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (timer != NULL) {
+            LARGE_INTEGER due;
+            due.QuadPart = -(nanos / 100); // relative, in 100 ns units
+            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+                WaitForSingleObject(timer, INFINITE);
+                return;
+            }
+        }
+        Sleep((DWORD) (nanos / 1000000));
+    }
 }

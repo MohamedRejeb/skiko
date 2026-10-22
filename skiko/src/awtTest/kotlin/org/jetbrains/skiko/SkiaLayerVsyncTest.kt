@@ -56,6 +56,65 @@ class SkiaLayerVsyncTest {
         assertFailsWith<IllegalStateException> { layer.isVsyncEnabled = false }
     }
 
+    @Test
+    fun `late frame start starts off and must be set on the event dispatch thread`() {
+        val layer = onEdt { SkiaLayer(properties = SkiaLayerProperties(isVsyncEnabled = true)) }
+        assertFalse(onEdt { layer.isLateFrameStartEnabled })
+        assertFailsWith<IllegalStateException> { layer.isLateFrameStartEnabled = true }
+    }
+
+    @Test(timeout = 60000)
+    fun `late frame start is forwarded to the redrawer and to a recreated one`() = uiTest {
+        val redrawers = mutableListOf<RecordingRedrawer>()
+        val window = UiTestWindow(
+            properties = SkiaLayerProperties(isVsyncEnabled = true),
+            renderFactory = { layer, _, _, _ -> RecordingRedrawer(layer).also(redrawers::add) }
+        )
+        try {
+            window.setSize(400, 300)
+            window.isVisible = true
+            window.layer.isLateFrameStartEnabled = true
+            window.layer.skipLateFrameStart()
+            assertEquals(listOf("lateStart=false", "lateStart=true", "skip"), redrawers.single().lateCalls)
+
+            // Re-adding the layer disposes its redrawer and creates a new one
+            window.contentPane.remove(window.layer)
+            window.contentPane.add(window.layer)
+
+            assertEquals(listOf("lateStart=true"), redrawers.last().lateCalls)
+        } finally {
+            window.dispose()
+        }
+    }
+
+    @Test(timeout = 60000)
+    fun `rendering continues while the late frame start is switched at runtime`() = uiTest {
+        val framesPerStep = 30
+        var drawCount = 0
+        val onDrawCompleted = CompletableDeferred<Unit>()
+        val window = UiTestWindow(properties = SkiaLayerProperties(isVsyncEnabled = true))
+        try {
+            window.setSize(400, 200)
+            window.layer.renderDelegate = SkikoRenderDelegate { _, _, _, _ ->
+                drawCount++
+                when (drawCount) {
+                    framesPerStep -> window.layer.isLateFrameStartEnabled = true
+                    2 * framesPerStep -> window.layer.skipLateFrameStart()
+                    3 * framesPerStep -> window.layer.isFrameThrottlingEnabled = false
+                    4 * framesPerStep -> onDrawCompleted.complete(Unit)
+                }
+                if (!onDrawCompleted.isCompleted) window.layer.needRender()
+            }
+            window.isUndecorated = true
+            window.isVisible = true
+
+            onDrawCompleted.await()
+            assertRenderApiFor(window.layer)
+        } finally {
+            window.dispose()
+        }
+    }
+
     @Test(timeout = 60000)
     fun `switches are forwarded to the redrawer`() = uiTest {
         val redrawers = mutableListOf<RecordingRedrawer>()
@@ -163,6 +222,7 @@ class SkiaLayerVsyncTest {
 
     private open class RecordingRedrawer(protected val layer: SkiaLayer) : Redrawer {
         val calls = mutableListOf<String>()
+        val lateCalls = mutableListOf<String>()
 
         override fun setFrameThrottlingEnabled(enabled: Boolean) {
             calls += "throttling=$enabled"
@@ -170,6 +230,14 @@ class SkiaLayerVsyncTest {
 
         override fun setPresentSyncEnabled(enabled: Boolean) {
             calls += "presentSync=$enabled"
+        }
+
+        override fun setLateFrameStartEnabled(enabled: Boolean) {
+            lateCalls += "lateStart=$enabled"
+        }
+
+        override fun skipLateFrameStart() {
+            lateCalls += "skip"
         }
 
         override fun dispose() = Unit
