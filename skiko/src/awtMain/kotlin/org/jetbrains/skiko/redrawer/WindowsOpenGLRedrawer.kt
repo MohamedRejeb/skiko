@@ -174,6 +174,7 @@ private class LateFrameStart {
     private val timing = LongArray(2)
     private val renderNanos = LongArray(32)
     private var renders = 0
+    private var period = DEFAULT_PERIOD_NANOS
     // Half of MIN_VALUE: subtracting it from a nanoTime can't overflow
     private var lastVblank = Long.MIN_VALUE / 2
 
@@ -203,21 +204,30 @@ private class LateFrameStart {
         }
         val now = System.nanoTime()
         val period = timing[1]
-        val render = expectedRenderNanos()
+        this.period = period
+        val sorted = sortedRenderNanos()
+        // A high percentile: one slow frame shouldn't start every frame early. After a miss, the slowest
+        // recent frame, until frames make their vblank again.
+        val slow = when {
+            sorted.isEmpty() -> DEFAULT_RENDER_NANOS
+            missed.any { it } -> sorted.last()
+            else -> sorted[(sorted.size - 1) * percentile / 100]
+        }
+        val typical = if (sorted.isEmpty()) DEFAULT_RENDER_NANOS else sorted[(sorted.size - 1) / 2]
         // A frame as long as the refresh starts right after the vblank, as without a late start
-        val lead = minOf(render + marginNanos, period - MIN_SLACK_NANOS)
+        val lead = minOf(slow + marginNanos, period - MIN_SLACK_NANOS)
 
         var vblank = now + timing[0]
-        // One frame per vblank, and none for a vblank it can't be ready for
+        // One frame per vblank, and none for a vblank a typical frame can't be ready for
         val sameAsLast = vblank - lastVblank < period / 2
-        val tooLate = vblank - now < render
+        val tooLate = vblank - now < typical
         if (sameAsLast || tooLate) vblank += period
         val previousVblank = lastVblank
         lastVblank = vblank
 
         val start = vblank - lead
-        if (trace) println("[late] now=%.3f toNext=%.2f render=%.2f lead=%.2f same=%b late=%b target=+%.2f wait=%.2f".format(
-            now / 1e6, timing[0] / 1e6, render / 1e6, lead / 1e6, sameAsLast, tooLate, (vblank - now) / 1e6, (start - now) / 1e6))
+        if (trace) println("[late] now=%.3f toNext=%.2f typical=%.2f slow=%.2f lead=%.2f same=%b late=%b target=+%.2f wait=%.2f".format(
+            now / 1e6, timing[0] / 1e6, typical / 1e6, slow / 1e6, lead / 1e6, sameAsLast, tooLate, (vblank - now) / 1e6, (start - now) / 1e6))
         if (start - System.nanoTime() > MIN_WAIT_NANOS) {
             val skipped = withContext(dispatcherToBlockOn) {
                 // In slices, so a skipped wait ends within one
@@ -240,25 +250,18 @@ private class LateFrameStart {
     }
 
     fun onRendered(started: Long, finished: Long) {
-        renderNanos[renders % renderNanos.size] = finished - started
+        // A frame longer than the refresh (a GC pause, say) tells nothing more about when to start the next
+        renderNanos[renders % renderNanos.size] = minOf(finished - started, period)
         renders++
         if (target != 0L) missed[finishedLate++ % missed.size] = finished > target
         target = 0L
     }
 
-    /**
-     * A high percentile of recent render times: a slow outlier shouldn't push every frame earlier. After a
-     * frame missed its vblank, the slowest recent one instead, until frames make their vblank again.
-     */
-    private fun expectedRenderNanos(): Long {
-        val count = minOf(renders, renderNanos.size)
-        if (count == 0) return DEFAULT_RENDER_NANOS
-        val sorted = renderNanos.copyOf(count).apply { sort() }
-        return if (missed.any { it }) sorted.last() else sorted[(count - 1) * percentile / 100]
-    }
+    private fun sortedRenderNanos(): LongArray = renderNanos.copyOf(minOf(renders, renderNanos.size)).apply { sort() }
 
     private companion object {
         const val DEFAULT_RENDER_NANOS = 4_000_000L
+        const val DEFAULT_PERIOD_NANOS = 16_666_667L
         const val MIN_WAIT_NANOS = 200_000L
         const val MIN_SLACK_NANOS = 1_000_000L
         const val SKIP_CHECK_NANOS = 1_000_000L
