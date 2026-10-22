@@ -348,6 +348,7 @@ actual open class SkiaLayer internal constructor(
                 // properties hold the initial values, the layer's switches may have changed since
                 it.setFrameThrottlingEnabled(isFrameThrottlingEnabled)
                 it.setPresentSyncEnabled(isPresentSyncEnabled)
+                it.setLateFrameStartEnabled(isLateFrameStartEnabled)
                 it.syncBounds()
             }
         },
@@ -390,6 +391,21 @@ actual open class SkiaLayer internal constructor(
             check(isEventDispatchThread()) { "Method should be called from AWT event dispatch thread" }
             field = value
             redrawer?.setPresentSyncEnabled(value)
+        }
+
+    /**
+     * Whether a throttled frame starts as late before the next vblank as its measured render time allows,
+     * instead of right after the previous vblank. Input that arrives during a refresh then still reaches
+     * the frame shown at its end, so throttling adds almost no input latency.
+     * Only has an effect with OpenGL on Windows, while [isFrameThrottlingEnabled] is on.
+     *
+     * Must be set from the AWT event dispatch thread.
+     */
+    var isLateFrameStartEnabled: Boolean = false
+        set(value) {
+            check(isEventDispatchThread()) { "Method should be called from AWT event dispatch thread" }
+            field = value
+            redrawer?.setLateFrameStartEnabled(value)
         }
 
     /**

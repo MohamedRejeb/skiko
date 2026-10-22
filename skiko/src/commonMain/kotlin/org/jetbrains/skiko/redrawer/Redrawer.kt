@@ -25,6 +25,12 @@ internal interface Redrawer {
      * Only redrawers whose presentation can be switched separately from throttling (Metal) use it.
      */
     fun setPresentSyncEnabled(enabled: Boolean) = Unit
+
+    /**
+     * Turns starting a throttled frame as late before the next vblank as its render time allows on or off.
+     * Only redrawers that know when the next vblank is (Windows OpenGL) use it.
+     */
+    fun setLateFrameStartEnabled(enabled: Boolean) = Unit
     val renderInfo: String
     fun isTransparentBackgroundSupported(): Boolean
 }
