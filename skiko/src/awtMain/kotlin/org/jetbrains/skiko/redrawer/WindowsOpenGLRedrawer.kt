@@ -154,6 +154,8 @@ internal class WindowsOpenGLRedrawer(
             if (lateStartEnabled) lateFrameStart.onRendered(nanoTime, finished)
 
             val isVsyncEnabled = !startsLate && toRedrawVisible.all { it.isFrameThrottlingEnabled }
+            if (lateFrameStartTrace) println("[frame] start=%.3f rendered=%d lateEnabled=%b startsLate=%b vsyncWait=%b".format(
+                nanoTime / 1e6, toRedrawVisible.count(), lateStartEnabled, startsLate, isVsyncEnabled))
             if (isVsyncEnabled) {
                 withContext(dispatcherToBlockOn) {
                     dwmFlush() // wait for vsync
@@ -197,9 +199,13 @@ private class LateFrameStart {
      */
     suspend fun await(): Boolean {
         target = 0L
-        if (!dwmVblankTiming(timing)) return false
+        if (!dwmVblankTiming(timing)) {
+            if (lateFrameStartTrace) println("[late] no DWM timing")
+            return false
+        }
         if (skipRequested) {
             skipRequested = false
+            if (lateFrameStartTrace) println("[late] now=%.3f skipped".format(System.nanoTime() / 1e6))
             return true
         }
         val now = System.nanoTime()
@@ -226,7 +232,7 @@ private class LateFrameStart {
         lastVblank = vblank
 
         val start = vblank - lead
-        if (trace) println("[late] now=%.3f toNext=%.2f typical=%.2f slow=%.2f lead=%.2f same=%b late=%b target=+%.2f wait=%.2f".format(
+        if (lateFrameStartTrace) println("[late] now=%.3f toNext=%.2f typical=%.2f slow=%.2f lead=%.2f same=%b late=%b target=+%.2f wait=%.2f".format(
             now / 1e6, timing[0] / 1e6, typical / 1e6, slow / 1e6, lead / 1e6, sameAsLast, tooLate, (vblank - now) / 1e6, (start - now) / 1e6))
         if (start - System.nanoTime() > MIN_WAIT_NANOS) {
             val skipped = withContext(dispatcherToBlockOn) {
@@ -268,9 +274,10 @@ private class LateFrameStart {
 
         val marginNanos = ((System.getProperty("skiko.windows.lateFrameStart.marginMs")?.toDoubleOrNull() ?: 2.0) * 1e6).toLong()
         val percentile = (System.getProperty("skiko.windows.lateFrameStart.percentile")?.toIntOrNull() ?: 90).coerceIn(50, 100)
-        val trace = System.getProperty("skiko.windows.lateFrameStart.trace") == "true"
     }
 }
+
+private val lateFrameStartTrace = System.getProperty("skiko.windows.lateFrameStart.trace") == "true"
 
 /** `-Dskiko.windows.frameTimes=true`: prints where frame time goes, every 240 frames. */
 private class FrameTimes {
