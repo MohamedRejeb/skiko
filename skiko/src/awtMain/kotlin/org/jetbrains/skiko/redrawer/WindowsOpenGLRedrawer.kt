@@ -151,7 +151,7 @@ internal class WindowsOpenGLRedrawer(
             frameTimes?.add(nanoTime, updated, drawn, swapped, finished, startsLate)
 
             // Every frame counts, a frame that fell back to vsync included, or one slow start would stick
-            if (lateStartEnabled) lateFrameStart.onRendered(finished - nanoTime)
+            if (lateStartEnabled) lateFrameStart.onRendered(nanoTime, finished)
 
             val isVsyncEnabled = !startsLate && toRedrawVisible.all { it.isFrameThrottlingEnabled }
             if (isVsyncEnabled) {
@@ -177,6 +177,11 @@ private class LateFrameStart {
     // Half of MIN_VALUE: subtracting it from a nanoTime can't overflow
     private var lastVblank = Long.MIN_VALUE / 2
 
+    // The vblank the frame being rendered started late for, 0 when it started at once
+    private var target = 0L
+    private val missed = BooleanArray(8)
+    private var finishedLate = 0
+
     @Volatile
     private var skipRequested = false
 
@@ -190,6 +195,7 @@ private class LateFrameStart {
      * the frame then waits for vsync after it is presented instead.
      */
     suspend fun await(): Boolean {
+        target = 0L
         if (!dwmVblankTiming(timing)) return false
         if (skipRequested) {
             skipRequested = false
@@ -222,22 +228,29 @@ private class LateFrameStart {
                 skipRequested = false
                 // Started early, so a later frame may still make this vblank
                 lastVblank = previousVblank
+                return true
             }
         }
+        target = vblank
         return true
     }
 
-    fun onRendered(nanos: Long) {
-        renderNanos[renders % renderNanos.size] = nanos
+    fun onRendered(started: Long, finished: Long) {
+        renderNanos[renders % renderNanos.size] = finished - started
         renders++
+        if (target != 0L) missed[finishedLate++ % missed.size] = finished > target
+        target = 0L
     }
 
-    /** A high percentile of recent render times: a slow outlier shouldn't push every frame earlier. */
+    /**
+     * A high percentile of recent render times: a slow outlier shouldn't push every frame earlier. After a
+     * frame missed its vblank, the slowest recent one instead, until frames make their vblank again.
+     */
     private fun expectedRenderNanos(): Long {
         val count = minOf(renders, renderNanos.size)
         if (count == 0) return DEFAULT_RENDER_NANOS
         val sorted = renderNanos.copyOf(count).apply { sort() }
-        return sorted[(count - 1) * percentile / 100]
+        return if (missed.any { it }) sorted.last() else sorted[(count - 1) * percentile / 100]
     }
 
     private companion object {
