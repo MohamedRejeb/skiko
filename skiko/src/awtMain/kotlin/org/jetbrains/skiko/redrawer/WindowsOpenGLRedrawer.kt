@@ -202,12 +202,12 @@ private class LateFrameStart {
         renders++
     }
 
-    /** The 90th percentile of recent render times: a slow outlier shouldn't push every frame earlier. */
+    /** A high percentile of recent render times: a slow outlier shouldn't push every frame earlier. */
     private fun expectedRenderNanos(): Long {
         val count = minOf(renders, renderNanos.size)
         if (count == 0) return DEFAULT_RENDER_NANOS
         val sorted = renderNanos.copyOf(count).apply { sort() }
-        return sorted[(count - 1) * 9 / 10]
+        return sorted[(count - 1) * percentile / 100]
     }
 
     private companion object {
@@ -216,6 +216,7 @@ private class LateFrameStart {
         const val MIN_SLACK_NANOS = 1_000_000L
 
         val marginNanos = ((System.getProperty("skiko.windows.lateFrameStart.marginMs")?.toDoubleOrNull() ?: 2.0) * 1e6).toLong()
+        val percentile = (System.getProperty("skiko.windows.lateFrameStart.percentile")?.toIntOrNull() ?: 90).coerceIn(50, 100)
     }
 }
 
