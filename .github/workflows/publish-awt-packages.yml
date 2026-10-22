@@ -5,7 +5,8 @@ name: Publish Desktop to GitHub Packages
 # repository's GitHub Packages Maven registry under a "-fork.N" version. Push a
 # "desktop-v<version>" tag, e.g. desktop-v0.150.1-fork.2, to run it. Consumers add
 #   maven("https://maven.pkg.github.com/<owner>/skiko") with a GitHub token
-# and force org.jetbrains.skiko:skiko-awt to that version; its constraints bring the runtimes.
+# and force skiko-awt and the skiko-awt-runtime-* artifacts to that version: Gradle orders a
+# "-fork.N" version below the stock one, so forcing skiko-awt alone fails on the runtimes.
 #
 # Each job publishes its own artifacts, so a failed job can be re-run on its own.
 
@@ -219,7 +220,10 @@ jobs:
             echo '    }'
             echo '}'
             echo 'configurations.configureEach {'
-            echo '    resolutionStrategy.force("org.jetbrains.skiko:skiko-awt:${{ needs.version.outputs.version }}")'
+            echo '    resolutionStrategy.eachDependency {'
+            echo '        if (requested.group == "org.jetbrains.skiko" && requested.name.startsWith("skiko-awt"))'
+            echo '            useVersion("${{ needs.version.outputs.version }}")'
+            echo '    }'
             echo '}'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
