@@ -112,6 +112,8 @@ internal class WindowsOpenGLRedrawer(
 
         private val lateFrameStart = LateFrameStart()
 
+        private val frameTimes = if (System.getProperty("skiko.windows.frameTimes") == "true") FrameTimes() else null
+
         private val frameDispatcher = FrameDispatcher(MainUIDispatcher) {
             // Requested while the previous frame waited for its late start, which drew it: waiting for vsync
             // here would only delay the next late start
@@ -130,23 +132,28 @@ internal class WindowsOpenGLRedrawer(
                     // continue
                 }
             }
+            val updated = System.nanoTime()
 
             for (redrawer in toRedrawVisible) {
                 redrawer.makeCurrent()
                 redrawer.draw()
             }
+            val drawn = System.nanoTime()
 
             for (redrawer in toRedrawVisible) {
                 redrawer.swapBuffers()
             }
+            val swapped = System.nanoTime()
 
             for (redrawer in toRedrawVisible) {
                 redrawer.makeCurrent()
                 OpenGLApi.instance.glFinish()
             }
+            val finished = System.nanoTime()
+            frameTimes?.add(nanoTime, updated, drawn, swapped, finished, startsLate)
 
             // Every frame counts, a frame that fell back to vsync included, or one slow start would stick
-            if (lateStartEnabled) lateFrameStart.onRendered(nanoTime, System.nanoTime())
+            if (lateStartEnabled) lateFrameStart.onRendered(nanoTime, finished)
 
             val isVsyncEnabled = !startsLate && toRedrawVisible.all { it.isFrameThrottlingEnabled }
             if (isVsyncEnabled) {
@@ -259,6 +266,29 @@ private class LateFrameStart {
 
         val marginNanos = ((System.getProperty("skiko.windows.lateFrameStart.marginMs")?.toDoubleOrNull() ?: 2.0) * 1e6).toLong()
         val percentile = (System.getProperty("skiko.windows.lateFrameStart.percentile")?.toIntOrNull() ?: 90).coerceIn(50, 100)
+    }
+}
+
+/** `-Dskiko.windows.frameTimes=true`: prints where frame time goes, every 240 frames. */
+private class FrameTimes {
+    private val stages = Array(4) { DoubleArray(240) }
+    private var count = 0
+    private var late = 0
+
+    fun add(start: Long, updated: Long, drawn: Long, swapped: Long, finished: Long, startedLate: Boolean) {
+        stages[0][count] = (updated - start) / 1e6
+        stages[1][count] = (drawn - updated) / 1e6
+        stages[2][count] = (swapped - drawn) / 1e6
+        stages[3][count] = (finished - swapped) / 1e6
+        if (startedLate) late++
+        if (++count < stages[0].size) return
+        val text = listOf("update", "draw", "swap", "glFinish").mapIndexed { i, name ->
+            val sorted = stages[i].sortedArray()
+            "$name p50=%.2f p90=%.2f max=%.2f".format(sorted[sorted.size / 2], sorted[sorted.size * 9 / 10], sorted.last())
+        }
+        println("[skiko frames] ${text.joinToString(" | ")} | late starts $late/$count")
+        count = 0
+        late = 0
     }
 }
 
