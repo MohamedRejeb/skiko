@@ -108,10 +108,12 @@ internal class WindowsOpenGLRedrawer(
 
         private val lateFrameStart = LateFrameStart()
 
+        private val frameTimes = if (System.getProperty("skiko.windows.frameTimes") == "true") FrameTimes() else null
+
         private val frameDispatcher = FrameDispatcher(MainUIDispatcher) {
-            val startsLate = toRedraw.isNotEmpty() &&
-                toRedraw.all { it.isFrameThrottlingEnabled && it.isLateFrameStartEnabled } &&
-                lateFrameStart.await()
+            val lateStartEnabled = toRedraw.isNotEmpty() &&
+                toRedraw.all { it.isFrameThrottlingEnabled && it.isLateFrameStartEnabled }
+            val startsLate = lateStartEnabled && lateFrameStart.await()
 
             toRedrawCopy.addAll(toRedraw)
             toRedraw.clear()
@@ -124,23 +126,28 @@ internal class WindowsOpenGLRedrawer(
                     // continue
                 }
             }
+            val updated = System.nanoTime()
 
             for (redrawer in toRedrawVisible) {
                 redrawer.makeCurrent()
                 redrawer.draw()
             }
+            val drawn = System.nanoTime()
 
             for (redrawer in toRedrawVisible) {
                 redrawer.swapBuffers()
             }
+            val swapped = System.nanoTime()
 
             for (redrawer in toRedrawVisible) {
                 redrawer.makeCurrent()
                 OpenGLApi.instance.glFinish()
             }
+            val finished = System.nanoTime()
+            frameTimes?.add(nanoTime, updated, drawn, swapped, finished, startsLate)
 
-            // A late start already waited for its vblank: the next frame aims at the vblank after it
-            if (startsLate) lateFrameStart.onRendered(System.nanoTime() - nanoTime)
+            // Every frame counts, a frame that fell back to vsync included, or one slow start would stick
+            if (lateStartEnabled) lateFrameStart.onRendered(finished - nanoTime)
 
             val isVsyncEnabled = !startsLate && toRedrawVisible.all { it.isFrameThrottlingEnabled }
             if (isVsyncEnabled) {
@@ -167,16 +174,16 @@ private class LateFrameStart {
     private var lastVblank = Long.MIN_VALUE / 2
 
     /**
-     * Waits for the frame's start time. Returns false, without waiting, when DWM has no vblank timing or
-     * rendering takes too long to start late; the frame then waits for vsync after it is presented instead.
+     * Waits for the frame's start time. Returns false, without waiting, when DWM has no vblank timing;
+     * the frame then waits for vsync after it is presented instead.
      */
     suspend fun await(): Boolean {
         if (!dwmVblankTiming(timing)) return false
         val now = System.nanoTime()
         val period = timing[1]
         val render = expectedRenderNanos()
-        val lead = render + marginNanos
-        if (lead > period * 3 / 4) return false
+        // A frame as long as the refresh starts right after the vblank, as without a late start
+        val lead = minOf(render + marginNanos, period - MIN_SLACK_NANOS)
 
         var vblank = now + timing[0]
         // One frame per vblank, and none for a vblank it can't be ready for
@@ -206,8 +213,32 @@ private class LateFrameStart {
     private companion object {
         const val DEFAULT_RENDER_NANOS = 4_000_000L
         const val MIN_WAIT_NANOS = 200_000L
+        const val MIN_SLACK_NANOS = 1_000_000L
 
         val marginNanos = ((System.getProperty("skiko.windows.lateFrameStart.marginMs")?.toDoubleOrNull() ?: 2.0) * 1e6).toLong()
+    }
+}
+
+/** `-Dskiko.windows.frameTimes=true`: prints where frame time goes, every 240 frames. */
+private class FrameTimes {
+    private val stages = Array(4) { DoubleArray(240) }
+    private var count = 0
+    private var late = 0
+
+    fun add(start: Long, updated: Long, drawn: Long, swapped: Long, finished: Long, startedLate: Boolean) {
+        stages[0][count] = (updated - start) / 1e6
+        stages[1][count] = (drawn - updated) / 1e6
+        stages[2][count] = (swapped - drawn) / 1e6
+        stages[3][count] = (finished - swapped) / 1e6
+        if (startedLate) late++
+        if (++count < stages[0].size) return
+        val text = listOf("update", "draw", "swap", "glFinish").mapIndexed { i, name ->
+            val sorted = stages[i].sortedArray()
+            "$name p50=%.2f p90=%.2f max=%.2f".format(sorted[sorted.size / 2], sorted[sorted.size * 9 / 10], sorted.last())
+        }
+        println("[skiko frames] ${text.joinToString(" | ")} | late starts $late/$count")
+        count = 0
+        late = 0
     }
 }
 
