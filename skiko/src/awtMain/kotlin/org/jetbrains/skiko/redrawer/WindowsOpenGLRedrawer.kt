@@ -115,8 +115,10 @@ internal class WindowsOpenGLRedrawer(
         private val frameTimes = if (System.getProperty("skiko.windows.frameTimes") == "true") FrameTimes() else null
 
         private val frameDispatcher = FrameDispatcher(MainUIDispatcher) {
-            val lateStartEnabled = toRedraw.isNotEmpty() &&
-                toRedraw.all { it.isFrameThrottlingEnabled && it.isLateFrameStartEnabled }
+            // Requested while the previous frame waited for its late start, which drew it: waiting for vsync
+            // here would only delay the next late start
+            if (toRedraw.isEmpty()) return@FrameDispatcher
+            val lateStartEnabled = toRedraw.all { it.isFrameThrottlingEnabled && it.isLateFrameStartEnabled }
             val startsLate = lateStartEnabled && lateFrameStart.await()
 
             toRedrawCopy.addAll(toRedraw)
@@ -154,8 +156,9 @@ internal class WindowsOpenGLRedrawer(
             if (lateStartEnabled) lateFrameStart.onRendered(nanoTime, finished)
 
             val isVsyncEnabled = !startsLate && toRedrawVisible.all { it.isFrameThrottlingEnabled }
-            if (lateFrameStartTrace) println("[frame] start=%.3f rendered=%d lateEnabled=%b startsLate=%b vsyncWait=%b".format(
-                nanoTime / 1e6, toRedrawVisible.count(), lateStartEnabled, startsLate, isVsyncEnabled))
+            if (lateFrameStartTrace) println("[frame] start=%.3f rendered=%d lateEnabled=%b startsLate=%b vsyncWait=%b layers=%s".format(
+                nanoTime / 1e6, toRedrawVisible.count(), lateStartEnabled, startsLate, isVsyncEnabled,
+                toRedrawVisible.joinToString { r -> "${r.layer.width}x${r.layer.height}:throttle=${r.isFrameThrottlingEnabled}:" + javax.swing.SwingUtilities.getWindowAncestor(r.layer)?.let { w -> w.javaClass.simpleName + "/" + ((w as? java.awt.Frame)?.title ?: (w as? java.awt.Dialog)?.title) + "/visible=" + w.isVisible } }))
             if (isVsyncEnabled) {
                 withContext(dispatcherToBlockOn) {
                     dwmFlush() // wait for vsync
