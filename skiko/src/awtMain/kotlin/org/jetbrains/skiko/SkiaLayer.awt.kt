@@ -416,6 +416,10 @@ actual open class SkiaLayer internal constructor(
         redrawer?.skipLateFrameStart()
     }
 
+    /** LOCAL DIAGNOSTICS: called right after each frame of this layer is presented, with System.nanoTime(). Any thread. */
+    @Volatile
+    var onFramePresented: ((Long) -> Unit)? = null
+
     /**
      * Sets both [isFrameThrottlingEnabled] and [isPresentSyncEnabled]. Reads `true` only when both are on.
      */

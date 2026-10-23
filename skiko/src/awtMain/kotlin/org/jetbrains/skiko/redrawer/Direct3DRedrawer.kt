@@ -89,6 +89,7 @@ internal class Direct3DRedrawer(
         inDrawScope {
             withContext(dispatcherToBlockOn) {
                 drawAndSwap(withVsync = isFrameThrottlingEnabled)
+                layer.onFramePresented?.invoke(System.nanoTime())
             }
         }
     }
