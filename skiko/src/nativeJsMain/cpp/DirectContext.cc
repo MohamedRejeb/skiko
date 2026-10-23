@@ -81,6 +81,34 @@ SKIKO_EXPORT void org_jetbrains_skia_DirectContext__1nSetResourceCacheLimit
     context->setResourceCacheLimit((size_t) maxResourceBytes);
 }
 
+SKIKO_EXPORT KLong org_jetbrains_skia_DirectContext__1nGetResourceCacheUsage
+  (KNativePointer ptr) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(ptr);
+    size_t bytes = 0;
+    context->getResourceCacheUsage(nullptr, &bytes);
+    return (KLong) bytes;
+}
+
+SKIKO_EXPORT KLong org_jetbrains_skia_DirectContext__1nGetResourceCachePurgeableBytes
+  (KNativePointer ptr) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(ptr);
+    return (KLong) context->getResourceCachePurgeableBytes();
+}
+
+SKIKO_EXPORT void org_jetbrains_skia_DirectContext__1nPerformDeferredCleanup
+  (KNativePointer ptr, KLong msNotUsed) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(ptr);
+    context->performDeferredCleanup(std::chrono::milliseconds(msNotUsed));
+}
+
+SKIKO_EXPORT void org_jetbrains_skia_DirectContext__1nPurgeUnlockedResources
+  (KNativePointer ptr, KBoolean scratchResourcesOnly) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(ptr);
+    context->purgeUnlockedResources(scratchResourcesOnly
+        ? GrPurgeResourceOptions::kScratchResourcesOnly
+        : GrPurgeResourceOptions::kAllResources);
+}
+
 GrSyncCpu grSyncCpuFromBool(bool syncCpu) {
     if (syncCpu) return GrSyncCpu::kYes;
     return GrSyncCpu::kNo;

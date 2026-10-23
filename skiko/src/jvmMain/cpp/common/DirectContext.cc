@@ -75,6 +75,34 @@ extern "C" JNIEXPORT void JNICALL Java_org_jetbrains_skia_DirectContextKt_Direct
     context->setResourceCacheLimit((size_t) maxResourceBytes);
 }
 
+extern "C" JNIEXPORT jlong JNICALL Java_org_jetbrains_skia_DirectContextKt_DirectContext_1nGetResourceCacheUsage
+  (JNIEnv* env, jclass jclass, jlong ptr) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(static_cast<uintptr_t>(ptr));
+    size_t bytes = 0;
+    context->getResourceCacheUsage(nullptr, &bytes);
+    return (jlong) bytes;
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_org_jetbrains_skia_DirectContextKt_DirectContext_1nGetResourceCachePurgeableBytes
+  (JNIEnv* env, jclass jclass, jlong ptr) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(static_cast<uintptr_t>(ptr));
+    return (jlong) context->getResourceCachePurgeableBytes();
+}
+
+extern "C" JNIEXPORT void JNICALL Java_org_jetbrains_skia_DirectContextKt_DirectContext_1nPerformDeferredCleanup
+  (JNIEnv* env, jclass jclass, jlong ptr, jlong msNotUsed) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(static_cast<uintptr_t>(ptr));
+    context->performDeferredCleanup(std::chrono::milliseconds(msNotUsed));
+}
+
+extern "C" JNIEXPORT void JNICALL Java_org_jetbrains_skia_DirectContextKt_DirectContext_1nPurgeUnlockedResources
+  (JNIEnv* env, jclass jclass, jlong ptr, jboolean scratchResourcesOnly) {
+    GrDirectContext* context = reinterpret_cast<GrDirectContext*>(static_cast<uintptr_t>(ptr));
+    context->purgeUnlockedResources(scratchResourcesOnly
+        ? GrPurgeResourceOptions::kScratchResourcesOnly
+        : GrPurgeResourceOptions::kAllResources);
+}
+
 GrSyncCpu grSyncCpuFromBool(bool syncCpu) {
   if (syncCpu) return GrSyncCpu::kYes;
   return GrSyncCpu::kNo;

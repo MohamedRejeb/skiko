@@ -34,6 +34,18 @@ internal interface Redrawer {
 
     /** Makes the frame waiting for its late start, or the next one, start at once. */
     fun skipLateFrameStart() = Unit
+
+    /**
+     * Frees the GPU resources the context caches that nothing has used for [notUsedForMillis], after the next
+     * frame. Only redrawers with a GPU context use it.
+     */
+    fun purgeGpuResources(notUsedForMillis: Long) = Unit
+
+    /** Bytes of GPU resources the context cached after the last frame; -1 without a GPU context or a frame. */
+    val gpuResourceCacheBytes: Long get() = -1L
+
+    /** The part of [gpuResourceCacheBytes] nothing was using, which [purgeGpuResources] can free. */
+    val gpuResourceCachePurgeableBytes: Long get() = -1L
     val renderInfo: String
     fun isTransparentBackgroundSupported(): Boolean
 }

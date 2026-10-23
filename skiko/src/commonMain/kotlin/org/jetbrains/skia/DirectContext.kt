@@ -149,6 +149,58 @@ class DirectContext internal constructor(ptr: NativePointer) : RefCnt(ptr) {
                 reachabilityBarrier(this)
             }
         }
+
+    /**
+     * Bytes of GPU resources the resource cache holds, whether something uses them or not.
+     */
+    val resourceCacheUsage: Long
+        get() {
+            try {
+                Stats.onNativeCall()
+                return DirectContext_nGetResourceCacheUsage(_ptr)
+            } finally {
+                reachabilityBarrier(this)
+            }
+        }
+
+    /**
+     * Bytes of GPU resources the resource cache holds that nothing uses at the moment, which a purge can free.
+     */
+    val resourceCachePurgeableBytes: Long
+        get() {
+            try {
+                Stats.onNativeCall()
+                return DirectContext_nGetResourceCachePurgeableBytes(_ptr)
+            } finally {
+                reachabilityBarrier(this)
+            }
+        }
+
+    /**
+     * Frees the cached GPU resources that nothing has used for [msNotUsed] milliseconds. Resources in use stay,
+     * and freed ones are made again when something needs them.
+     */
+    fun performDeferredCleanup(msNotUsed: Long) {
+        try {
+            Stats.onNativeCall()
+            DirectContext_nPerformDeferredCleanup(_ptr, msNotUsed)
+        } finally {
+            reachabilityBarrier(this)
+        }
+    }
+
+    /**
+     * Frees every cached GPU resource that nothing uses at the moment; with [scratchResourcesOnly], only those
+     * without content of their own, like render targets.
+     */
+    fun purgeUnlockedResources(scratchResourcesOnly: Boolean = false) {
+        try {
+            Stats.onNativeCall()
+            DirectContext_nPurgeUnlockedResources(_ptr, scratchResourcesOnly)
+        } finally {
+            reachabilityBarrier(this)
+        }
+    }
 }
 
 fun <R> DirectContext.useContext(block: (ctx: DirectContext) -> R): R = use {
@@ -166,6 +218,18 @@ private external fun DirectContext_nGetResourceCacheLimit(ptr: NativePointer): L
 
 @ExternalSymbolName("org_jetbrains_skia_DirectContext__1nSetResourceCacheLimit")
 private external fun DirectContext_nSetResourceCacheLimit(ptr: NativePointer, maxResourceBytes: Long)
+
+@ExternalSymbolName("org_jetbrains_skia_DirectContext__1nGetResourceCacheUsage")
+private external fun DirectContext_nGetResourceCacheUsage(ptr: NativePointer): Long
+
+@ExternalSymbolName("org_jetbrains_skia_DirectContext__1nGetResourceCachePurgeableBytes")
+private external fun DirectContext_nGetResourceCachePurgeableBytes(ptr: NativePointer): Long
+
+@ExternalSymbolName("org_jetbrains_skia_DirectContext__1nPerformDeferredCleanup")
+private external fun DirectContext_nPerformDeferredCleanup(ptr: NativePointer, msNotUsed: Long)
+
+@ExternalSymbolName("org_jetbrains_skia_DirectContext__1nPurgeUnlockedResources")
+private external fun DirectContext_nPurgeUnlockedResources(ptr: NativePointer, scratchResourcesOnly: Boolean)
 
 @ExternalSymbolName("org_jetbrains_skia_DirectContext__1nMakeGL")
 private external fun _nMakeGL(): NativePointer

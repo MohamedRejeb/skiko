@@ -21,6 +21,10 @@ internal class WindowsOpenGLRedrawer(
 
     private val contextHandler = OpenGLContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
+    override val gpuResourceCacheBytes: Long get() = contextHandler.gpuResourceCacheBytes
+    override val gpuResourceCachePurgeableBytes: Long get() = contextHandler.gpuResourceCachePurgeableBytes
+
+    override fun purgeGpuResources(notUsedForMillis: Long) = contextHandler.requestPurge(notUsedForMillis)
 
     private val device: Long = layer.backedLayer.useDrawingSurfacePlatformInfo {
         getDevice(it).also { devicePtr ->

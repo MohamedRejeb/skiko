@@ -417,6 +417,24 @@ actual open class SkiaLayer internal constructor(
     }
 
     /**
+     * Frees the GPU memory Skia keeps cached for this layer that no frame has used for [notUsedForMillis]
+     * milliseconds, like textures of content that's no longer on screen. It's done after the next frame, which
+     * this asks for, so whatever that frame draws keeps its resources.
+     */
+    fun purgeGpuResources(notUsedForMillis: Long = 0) {
+        redrawer?.purgeGpuResources(notUsedForMillis)
+        needRedraw()
+    }
+
+    /** Bytes of GPU resources Skia had cached for this layer after its last frame; -1 when unknown. */
+    val gpuResourceCacheBytes: Long
+        get() = redrawer?.gpuResourceCacheBytes ?: -1L
+
+    /** The part of [gpuResourceCacheBytes] no frame was using, which [purgeGpuResources] can free. */
+    val gpuResourceCachePurgeableBytes: Long
+        get() = redrawer?.gpuResourceCachePurgeableBytes ?: -1L
+
+    /**
      * Sets both [isFrameThrottlingEnabled] and [isPresentSyncEnabled]. Reads `true` only when both are on.
      */
     var isVsyncEnabled: Boolean

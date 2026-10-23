@@ -15,6 +15,10 @@ internal class LinuxOpenGLRedrawer(
 
     private val contextHandler = OpenGLContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
+    override val gpuResourceCacheBytes: Long get() = contextHandler.gpuResourceCacheBytes
+    override val gpuResourceCachePurgeableBytes: Long get() = contextHandler.gpuResourceCachePurgeableBytes
+
+    override fun purgeGpuResources(notUsedForMillis: Long) = contextHandler.requestPurge(notUsedForMillis)
 
     private var context = 0L
 
