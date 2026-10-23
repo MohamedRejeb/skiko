@@ -93,6 +93,7 @@ internal class AngleRedrawer(
     private fun draw() {
         inDrawScope {
             drawAndSwap(withVsync = isFrameThrottlingEnabled)
+            layer.onFramePresented?.invoke(System.nanoTime())
         }
     }
 

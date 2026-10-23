@@ -416,6 +416,10 @@ actual open class SkiaLayer internal constructor(
         redrawer?.skipLateFrameStart()
     }
 
+    /** LOCAL DIAGNOSTICS: called right after each frame of this layer is presented, with System.nanoTime(). Any thread. */
+    @Volatile
+    var onFramePresented: ((Long) -> Unit)? = null
+
     /**
      * Frees the GPU memory Skia keeps cached for this layer that no frame has used for [notUsedForMillis]
      * milliseconds, like textures of content that's no longer on screen. It's done after the next frame, which

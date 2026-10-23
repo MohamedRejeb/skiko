@@ -155,6 +155,7 @@ internal class WindowsOpenGLRedrawer(
                 OpenGLApi.instance.glFinish()
             }
             val finished = System.nanoTime()
+            for (redrawer in toRedrawVisible) redrawer.layer.onFramePresented?.invoke(finished)
             frameTimes?.add(nanoTime, updated, drawn, swapped, finished, startsLate)
 
             // Every frame counts, a frame that fell back to vsync included, or one slow start would stick
