@@ -33,6 +33,11 @@ internal abstract class ContextHandler(
         purgeNotUsedForMillis = notUsedForMillis
     }
 
+    /** How many frames this handler has drawn. */
+    @Volatile
+    var frames = 0L
+        private set
+
     protected abstract fun initContext(): Boolean
     protected abstract fun LayerDrawScope.initCanvas()
 
@@ -75,6 +80,7 @@ internal abstract class ContextHandler(
             gpuResourceCacheBytes = context.resourceCacheUsage
             gpuResourceCachePurgeableBytes = context.resourceCachePurgeableBytes
         }
+        frames++
     }
 }
 

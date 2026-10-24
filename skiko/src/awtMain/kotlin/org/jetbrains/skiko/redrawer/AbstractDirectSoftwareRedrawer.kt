@@ -13,6 +13,7 @@ internal abstract class AbstractDirectSoftwareRedrawer(
 ) : AWTRedrawer(layer, analytics, GraphicsApi.SOFTWARE_FAST) {
     private val contextHandler = DirectSoftwareContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
+    override val frameCount: Long get() = contextHandler.frames
 
     @Volatile
     private var isFrameThrottlingEnabled = properties.isVsyncEnabled

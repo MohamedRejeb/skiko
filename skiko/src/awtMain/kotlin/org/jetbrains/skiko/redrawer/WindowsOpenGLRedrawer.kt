@@ -21,6 +21,7 @@ internal class WindowsOpenGLRedrawer(
 
     private val contextHandler = OpenGLContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
+    override val frameCount: Long get() = contextHandler.frames
     override val gpuResourceCacheBytes: Long get() = contextHandler.gpuResourceCacheBytes
     override val gpuResourceCachePurgeableBytes: Long get() = contextHandler.gpuResourceCachePurgeableBytes
 

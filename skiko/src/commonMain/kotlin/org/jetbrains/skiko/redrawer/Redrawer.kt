@@ -46,6 +46,9 @@ internal interface Redrawer {
 
     /** The part of [gpuResourceCacheBytes] nothing was using, which [purgeGpuResources] can free. */
     val gpuResourceCachePurgeableBytes: Long get() = -1L
+
+    /** How many frames this redrawer has drawn; -1 when it doesn't count them. */
+    val frameCount: Long get() = -1L
     val renderInfo: String
     fun isTransparentBackgroundSupported(): Boolean
 }

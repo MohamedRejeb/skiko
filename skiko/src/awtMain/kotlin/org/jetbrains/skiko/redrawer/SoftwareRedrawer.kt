@@ -16,6 +16,7 @@ internal class SoftwareRedrawer(
 
     private val contextHandler = SoftwareContextHandler(layer)
     override val renderInfo: String get() = contextHandler.rendererInfo()
+    override val frameCount: Long get() = contextHandler.frames
 
     @Volatile
     private var isFrameThrottlingEnabled = properties.isVsyncEnabled

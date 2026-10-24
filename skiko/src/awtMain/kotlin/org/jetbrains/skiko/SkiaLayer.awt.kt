@@ -435,6 +435,13 @@ actual open class SkiaLayer internal constructor(
         get() = redrawer?.gpuResourceCachePurgeableBytes ?: -1L
 
     /**
+     * How many frames this layer's current renderer has drawn; -1 when unknown. It only grows, so two reads
+     * tell whether anything was drawn in between, which an app can take as its sign of being in use.
+     */
+    val frameCount: Long
+        get() = redrawer?.frameCount ?: -1L
+
+    /**
      * Sets both [isFrameThrottlingEnabled] and [isPresentSyncEnabled]. Reads `true` only when both are on.
      */
     var isVsyncEnabled: Boolean
