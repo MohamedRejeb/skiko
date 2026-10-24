@@ -1,7 +1,8 @@
 name: Publish Desktop to GitHub Packages
 
 # Fork-only workflow: builds the desktop (AWT) artifacts of this branch and publishes skiko,
-# skiko-awt, skiko-awt-runtime and the skiko-awt-runtime-<os>-<arch> native runtimes to this
+# skiko-awt, skiko-awt-runtime, the skiko-awt-runtime-<os>-<arch> native runtimes and the
+# Windows x64 ANGLE runtime (skiko-awt-runtime-angle-windows-x64) to this
 # repository's GitHub Packages Maven registry under a "-fork.N" version. Push a
 # "desktop-v<version>" tag, e.g. desktop-v0.150.1-fork.2, to run it. Consumers add
 #   maven("https://maven.pkg.github.com/<owner>/skiko") with a GitHub token
@@ -118,7 +119,7 @@ jobs:
       - uses: ./.github/actions/setup-prerequisites
         name: 'Setup Prerequisites'
 
-      - name: 'Publish the windows-x64 runtime'
+      - name: 'Publish the windows-x64 runtime and its ANGLE runtime'
         shell: bash
         working-directory: skiko
         env:
@@ -131,7 +132,8 @@ jobs:
             -Pskiko.arch=x64 \
             -Pdeploy.version="${{ needs.version.outputs.version }}" \
             -Pdeploy.release=true \
-            publishSkikoJvmRuntimeWindowsX64PublicationToComposeRepoRepository
+            publishSkikoJvmRuntimeWindowsX64PublicationToComposeRepoRepository \
+            publishSkikoJvmRuntimeAngleWindowsX64PublicationToComposeRepoRepository
 
       - name: 'Publish the windows-arm64 runtime'
         shell: bash
