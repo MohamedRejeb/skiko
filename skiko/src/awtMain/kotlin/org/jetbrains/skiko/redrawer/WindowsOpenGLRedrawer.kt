@@ -177,7 +177,7 @@ internal class WindowsOpenGLRedrawer(
  * Starts a throttled frame as late before the next vblank as recent render times allow, so input that
  * arrives during the refresh still reaches the frame DWM composes at its end. Used on the UI thread only.
  */
-private class LateFrameStart {
+internal class LateFrameStart {
     private val timing = LongArray(2)
     private val renderNanos = LongArray(32)
     private var renders = 0

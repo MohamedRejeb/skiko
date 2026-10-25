@@ -52,10 +52,18 @@ internal class Direct3DRedrawer(
             .takeIf { it != 0L } ?: throw RenderException("Failed to create DirectX12 device.")
     }
 
+    private var isLateFrameStartEnabled = false
+    private val lateFrameStart = LateFrameStart()
+
     private val frameDispatcher = FrameDispatcher(MainUIDispatcher) {
         if (layer.isShowing) {
+            val lateStart = isFrameThrottlingEnabled && isLateFrameStartEnabled
+            val startsLate = lateStart && lateFrameStart.await()
+            val started = System.nanoTime()
             update()
-            draw()
+            // A frame that started late is timed for its vblank already; waiting for the next one would undo that
+            draw(withVsync = isFrameThrottlingEnabled && !startsLate)
+            if (lateStart) lateFrameStart.onRendered(started, System.nanoTime())
         }
     }
 
@@ -80,6 +88,14 @@ internal class Direct3DRedrawer(
         isFrameThrottlingEnabled = enabled
     }
 
+    override fun setLateFrameStartEnabled(enabled: Boolean) {
+        isLateFrameStartEnabled = enabled
+    }
+
+    override fun skipLateFrameStart() {
+        lateFrameStart.skipNext()
+    }
+
     override fun renderImmediately() {
         checkDisposed()
         update()
@@ -90,10 +106,10 @@ internal class Direct3DRedrawer(
         }
     }
 
-    private suspend fun draw() {
+    private suspend fun draw(withVsync: Boolean) {
         inDrawScope {
             withContext(dispatcherToBlockOn) {
-                drawAndSwap(withVsync = isFrameThrottlingEnabled)
+                drawAndSwap(withVsync = withVsync)
             }
         }
     }
