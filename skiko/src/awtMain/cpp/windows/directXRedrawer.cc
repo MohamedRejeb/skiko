@@ -19,6 +19,7 @@
 #include "ganesh/d3d/GrD3DBackendSurface.h"
 #include <d3d12sdklayers.h>
 #include "ganesh/d3d/GrD3DBackendContext.h"
+#include "ganesh/GrContextOptions.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
@@ -401,7 +402,11 @@ extern "C"
     {
         DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
         GrD3DBackendContext backendContext = d3dDevice->backendContext;
-        return toJavaPointer(GrDirectContexts::MakeD3D(backendContext).release());
+        GrContextOptions options;
+        // Path masks reused from Ganesh's cache come out as black blocks and checkerboards on Direct3D (seen on Intel
+        // Iris Xe while drawing long pen strokes); drawing the masks again each time costs nothing measurable.
+        options.fAllowPathMaskCaching = false;
+        return toJavaPointer(GrDirectContexts::MakeD3D(backendContext, options).release());
     }
 
     JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_makeDirectXSurface(
