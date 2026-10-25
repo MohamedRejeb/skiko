@@ -26,6 +26,53 @@
 
 const int BuffersCount = 2;
 
+// Skia's own allocator (D3D12MA), which suballocates every resource from shared heaps; declared here only to call it
+class GrD3DAMDMemoryAllocator {
+public:
+    static sk_sp<GrD3DMemoryAllocator> Make(IDXGIAdapter *adapter, ID3D12Device *device);
+};
+
+/**
+ * Gives render targets and depth-stencil textures memory of their own and leaves everything else to Skia's allocator.
+ * D3D12 requires such textures to be cleared or discarded before first use when they're placed in heap memory that
+ * held something else, and Skia does neither: on Intel Iris Xe they then showed blocks of stale or black pixels
+ * (squares, checkerboards) after a while of drawing. Committed resources start out initialized.
+ */
+class RenderTargetAllocator : public GrD3DMemoryAllocator {
+public:
+    RenderTargetAllocator(gr_cp<ID3D12Device> device, sk_sp<GrD3DMemoryAllocator> placed)
+        : device(std::move(device)), placed(std::move(placed)) {}
+
+    gr_cp<ID3D12Resource> createResource(D3D12_HEAP_TYPE heapType, const D3D12_RESOURCE_DESC *desc,
+                                         D3D12_RESOURCE_STATES initialState, sk_sp<GrD3DAlloc> *allocation,
+                                         const D3D12_CLEAR_VALUE *clearValue) override {
+        const UINT targetFlags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        // Skia aliases the unordered-access copies it makes to generate mipmaps, which only works on placed memory
+        if ((desc->Flags & targetFlags) == 0 || (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0) {
+            return placed->createResource(heapType, desc, initialState, allocation, clearValue);
+        }
+        D3D12_HEAP_PROPERTIES heapProperties = {};
+        heapProperties.Type = heapType;
+        gr_cp<ID3D12Resource> resource;
+        if (FAILED(device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, desc, initialState,
+                                                   clearValue, IID_PPV_ARGS(&resource)))) {
+            return nullptr;
+        }
+        *allocation = sk_make_sp<GrD3DAlloc>();
+        return resource;
+    }
+
+    gr_cp<ID3D12Resource> createAliasingResource(sk_sp<GrD3DAlloc> &allocation, uint64_t localOffset,
+                                                 const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initialState,
+                                                 const D3D12_CLEAR_VALUE *clearValue) override {
+        return placed->createAliasingResource(allocation, localOffset, desc, initialState, clearValue);
+    }
+
+private:
+    gr_cp<ID3D12Device> device;
+    sk_sp<GrD3DMemoryAllocator> placed;
+};
+
 class DirectXDevice
 {
 public:
@@ -350,6 +397,9 @@ extern "C"
         d3dDevice->backendContext.fDevice = device;
         d3dDevice->backendContext.fQueue = queue;
         d3dDevice->backendContext.fProtectedContext = GrProtected::kNo;
+        if (sk_sp<GrD3DMemoryAllocator> placed = GrD3DAMDMemoryAllocator::Make(adapter.get(), device.get())) {
+            d3dDevice->backendContext.fMemoryAllocator = sk_make_sp<RenderTargetAllocator>(device, std::move(placed));
+        }
 
         d3dDevice->device = device;
         d3dDevice->queue = queue;
@@ -403,8 +453,8 @@ extern "C"
         DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
         GrD3DBackendContext backendContext = d3dDevice->backendContext;
         GrContextOptions options;
-        // Path masks reused from Ganesh's cache come out as black blocks and checkerboards on Direct3D (seen on Intel
-        // Iris Xe while drawing long pen strokes); drawing the masks again each time costs nothing measurable.
+        // Each cached path mask is a new texture placed in heap memory other resources just used, and on Intel Iris Xe
+        // those show stale black blocks too. Without the cache, Skia reuses a few masks, at no measurable cost.
         options.fAllowPathMaskCaching = false;
         return toJavaPointer(GrDirectContexts::MakeD3D(backendContext, options).release());
     }
