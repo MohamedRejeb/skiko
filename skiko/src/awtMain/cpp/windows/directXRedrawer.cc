@@ -19,6 +19,9 @@
 #include "ganesh/d3d/GrD3DBackendSurface.h"
 #include <d3d12sdklayers.h>
 #include "ganesh/d3d/GrD3DBackendContext.h"
+#include "ganesh/GrContextOptions.h"
+#include <cstdio>
+#include <cstdlib>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
@@ -401,7 +404,22 @@ extern "C"
     {
         DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
         GrD3DBackendContext backendContext = d3dDevice->backendContext;
-        return toJavaPointer(GrDirectContexts::MakeD3D(backendContext).release());
+        // Experiment switches (exp/d3d-squares): which Ganesh options stop the Direct3D squares
+        GrContextOptions options;
+        if (std::getenv("SKIKO_D3D_NO_MASK_CACHE")) options.fAllowPathMaskCaching = false;
+        if (std::getenv("SKIKO_D3D_AVOID_STENCIL")) options.fAvoidStencilBuffers = true;
+        if (const char* v = std::getenv("SKIKO_D3D_MSAA")) options.fInternalMultisampleCount = std::atoi(v);
+        if (std::getenv("SKIKO_D3D_INTEL_MSAA")) options.fAllowMSAAOnNewIntel = true;
+        if (std::getenv("SKIKO_D3D_NO_TASK_SPLITTING")) options.fReduceOpsTaskSplitting = GrContextOptions::Enable::kNo;
+        if (const char* path = std::getenv("SKIKO_D3D_LOG")) {
+            if (FILE* f = fopen(path, "a")) {
+                fprintf(f, "maskCache=%d avoidStencil=%d msaa=%d intelMsaa=%d taskSplitting=%d\n",
+                        options.fAllowPathMaskCaching, options.fAvoidStencilBuffers, options.fInternalMultisampleCount,
+                        options.fAllowMSAAOnNewIntel, static_cast<int>(options.fReduceOpsTaskSplitting));
+                fclose(f);
+            }
+        }
+        return toJavaPointer(GrDirectContexts::MakeD3D(backendContext, options).release());
     }
 
     JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_makeDirectXSurface(
