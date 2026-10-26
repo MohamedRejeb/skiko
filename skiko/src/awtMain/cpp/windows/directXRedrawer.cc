@@ -20,11 +20,169 @@
 #include <d3d12sdklayers.h>
 #include "ganesh/d3d/GrD3DBackendContext.h"
 #include "ganesh/GrContextOptions.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
 
-const int BuffersCount = 2;
+const int MaxBuffersCount = 3;
+
+// Experiment switches (exp/d3d-perf), read once per device from the environment
+static int envInt(const char *name, int fallback) {
+    const char *v = std::getenv(name);
+    return v ? std::atoi(v) : fallback;
+}
+
+static void logLine(const char *line) {
+    if (const char *path = std::getenv("SKIKO_D3D_LOG")) {
+        if (FILE *f = fopen(path, "a")) {
+            fprintf(f, "%s\n", line);
+            fclose(f);
+        }
+    }
+}
+
+// Skia's own allocator (D3D12MA), declared here only to call it
+class GrD3DAMDMemoryAllocator {
+public:
+    static sk_sp<GrD3DMemoryAllocator> Make(IDXGIAdapter *adapter, ID3D12Device *device);
+};
+
+// Experiment switch (exp/d3d-perf): SKIKO_D3D_COMMITTED=all makes every resource a committed one, =rt only render
+// targets and depth-stencil textures, which D3D12 leaves uninitialized when they are placed in reused heap memory
+static const char *committedMode = std::getenv("SKIKO_D3D_COMMITTED");
+
+class CommittedResourceAllocator : public GrD3DMemoryAllocator {
+public:
+    CommittedResourceAllocator(gr_cp<ID3D12Device> device, sk_sp<GrD3DMemoryAllocator> placed)
+        : device(std::move(device)), placed(std::move(placed)) {}
+
+    gr_cp<ID3D12Resource> createResource(D3D12_HEAP_TYPE heapType, const D3D12_RESOURCE_DESC *desc,
+                                         D3D12_RESOURCE_STATES initialState, sk_sp<GrD3DAlloc> *allocation,
+                                         const D3D12_CLEAR_VALUE *clearValue) override {
+        const UINT targetFlags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        if (placed && (desc->Flags & targetFlags) == 0) {
+            return placed->createResource(heapType, desc, initialState, allocation, clearValue);
+        }
+        D3D12_HEAP_PROPERTIES heapProperties = {};
+        heapProperties.Type = heapType;
+        gr_cp<ID3D12Resource> resource;
+        if (FAILED(device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, desc, initialState,
+                                                   clearValue, IID_PPV_ARGS(&resource)))) {
+            logLine("committed resource failed");
+            return nullptr;
+        }
+        *allocation = sk_make_sp<GrD3DAlloc>();
+        return resource;
+    }
+
+    gr_cp<ID3D12Resource> createAliasingResource(sk_sp<GrD3DAlloc> &, uint64_t, const D3D12_RESOURCE_DESC *,
+                                                 D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *) override {
+        logLine("aliasing resource requested");
+        return nullptr;
+    }
+
+private:
+    gr_cp<ID3D12Device> device;
+    sk_sp<GrD3DMemoryAllocator> placed;
+};
+
+// Experiment switch (exp/d3d-perf): SKIKO_D3D_COMMITTED=discard keeps Skia's placed resources and initializes each new
+// render target and depth-stencil texture with an aliasing barrier and a discard, queued before Skia's first use
+class DiscardingAllocator : public GrD3DMemoryAllocator {
+public:
+    DiscardingAllocator(gr_cp<ID3D12Device> device, gr_cp<ID3D12CommandQueue> queue, sk_sp<GrD3DMemoryAllocator> placed)
+        : device(std::move(device)), queue(std::move(queue)), placed(std::move(placed)) {}
+
+    ~DiscardingAllocator() override {
+        if (event != NULL) {
+            if (fence && fence->GetCompletedValue() < fenceValue) {
+                fence->SetEventOnCompletion(fenceValue, event);
+                WaitForSingleObject(event, INFINITE);
+            }
+            CloseHandle(event);
+        }
+    }
+
+    gr_cp<ID3D12Resource> createResource(D3D12_HEAP_TYPE heapType, const D3D12_RESOURCE_DESC *desc,
+                                         D3D12_RESOURCE_STATES initialState, sk_sp<GrD3DAlloc> *allocation,
+                                         const D3D12_CLEAR_VALUE *clearValue) override {
+        gr_cp<ID3D12Resource> resource = placed->createResource(heapType, desc, initialState, allocation, clearValue);
+        const UINT targetFlags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        if (resource && (desc->Flags & targetFlags) != 0) {
+            discard(resource.get(), initialState);
+        }
+        return resource;
+    }
+
+    gr_cp<ID3D12Resource> createAliasingResource(sk_sp<GrD3DAlloc> &allocation, uint64_t localOffset,
+                                                 const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initialState,
+                                                 const D3D12_CLEAR_VALUE *clearValue) override {
+        logLine("aliasing resource requested");
+        return placed->createAliasingResource(allocation, localOffset, desc, initialState, clearValue);
+    }
+
+private:
+    bool init() {
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator))) ||
+            FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.get(), nullptr,
+                                             IID_PPV_ARGS(&list))) ||
+            FAILED(list->Close()) ||
+            FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) {
+            logLine("discard setup failed");
+            list.reset(nullptr);
+            return false;
+        }
+        event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        return true;
+    }
+
+    void discard(ID3D12Resource *resource, D3D12_RESOURCE_STATES state) {
+        if (!list && !init()) {
+            return;
+        }
+        if (fence->GetCompletedValue() < fenceValue) {
+            fence->SetEventOnCompletion(fenceValue, event);
+            WaitForSingleObject(event, INFINITE);
+        }
+        commandAllocator->Reset();
+        list->Reset(commandAllocator.get(), nullptr);
+        D3D12_RESOURCE_BARRIER barriers[2] = {};
+        barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
+        barriers[0].Aliasing.pResourceBefore = nullptr;
+        barriers[0].Aliasing.pResourceAfter = resource;
+        const D3D12_RESOURCE_STATES discardState = state == D3D12_RESOURCE_STATE_DEPTH_WRITE
+            ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET;
+        const bool transition = state != discardState;
+        barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition.pResource = resource;
+        barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[1].Transition.StateBefore = state;
+        barriers[1].Transition.StateAfter = discardState;
+        list->ResourceBarrier(transition ? 2 : 1, barriers);
+        list->DiscardResource(resource, nullptr);
+        if (transition) {
+            barriers[1].Transition.StateBefore = discardState;
+            barriers[1].Transition.StateAfter = state;
+            list->ResourceBarrier(1, &barriers[1]);
+        }
+        list->Close();
+        ID3D12CommandList *lists[] = {list.get()};
+        queue->ExecuteCommandLists(1, lists);
+        queue->Signal(fence.get(), ++fenceValue);
+    }
+
+    gr_cp<ID3D12Device> device;
+    gr_cp<ID3D12CommandQueue> queue;
+    sk_sp<GrD3DMemoryAllocator> placed;
+    gr_cp<ID3D12CommandAllocator> commandAllocator;
+    gr_cp<ID3D12GraphicsCommandList> list;
+    gr_cp<ID3D12Fence> fence;
+    uint64_t fenceValue = 0;
+    HANDLE event = NULL;
+};
 
 class DirectXDevice
 {
@@ -34,14 +192,19 @@ public:
     gr_cp<ID3D12Device> device;
     gr_cp<IDXGISwapChain3> swapChain;
     gr_cp<ID3D12CommandQueue> queue;
-    gr_cp<ID3D12Resource> buffers[BuffersCount];
+    gr_cp<ID3D12Resource> buffers[MaxBuffersCount];
     gr_cp<ID3D12Fence> fence;
     gr_cp<IDCompositionDevice> dcDevice;
     gr_cp<IDCompositionTarget> dcTarget;
     gr_cp<IDCompositionVisual> dcVisual;
-    uint64_t fenceValues[BuffersCount];
+    uint64_t fenceValues[MaxBuffersCount];
     HANDLE fenceEvent = NULL;
     unsigned int bufferIndex;
+    int buffersCount = envInt("SKIKO_D3D_BUFFERS", 2) >= 3 ? 3 : 2;
+    int maxFrameLatency = envInt("SKIKO_D3D_MAX_LATENCY", 0);
+    bool tearing = std::getenv("SKIKO_D3D_TEARING") != nullptr;
+    UINT swapChainFlags = 0;
+    HANDLE frameLatencyWaitable = NULL;
 
     ~DirectXDevice()
     {
@@ -49,7 +212,11 @@ public:
         {
             CloseHandle(fenceEvent);
         }
-        for (int i = 0; i < BuffersCount; i++)
+        if (frameLatencyWaitable != NULL)
+        {
+            CloseHandle(frameLatencyWaitable);
+        }
+        for (int i = 0; i < MaxBuffersCount; i++)
         {
             buffers[i].reset(nullptr);
         }
@@ -63,6 +230,18 @@ public:
         gr_cp<IDXGIFactory4> swapChainFactory4;
         gr_cp<IDXGISwapChain1> swapChain1;
         CreateDXGIFactory2(0, IID_PPV_ARGS(&swapChainFactory4));
+        if (maxFrameLatency > 0) swapChainFlags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+        if (tearing) {
+            gr_cp<IDXGIFactory5> factory5;
+            BOOL allowTearing = FALSE;
+            if (SUCCEEDED(swapChainFactory4->QueryInterface(IID_PPV_ARGS(&factory5))) &&
+                SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing))) &&
+                allowTearing) {
+                swapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+            } else {
+                tearing = false;
+            }
+        }
         HRESULT result = S_OK;
         if (transparency) {
             result = CreateSwapChainForComposition(swapChainFactory4.get(), width, height, &swapChain1);
@@ -78,6 +257,22 @@ public:
         swapChainFactory4->MakeWindowAssociation(hWnd, DXGI_MWA_NO_ALT_ENTER);
         swapChain1->QueryInterface(IID_PPV_ARGS(&swapChain));
         swapChainFactory4.reset(nullptr);
+        if (maxFrameLatency > 0) {
+            gr_cp<IDXGISwapChain2> swapChain2;
+            if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain2)))) {
+                swapChain2->SetMaximumFrameLatency(maxFrameLatency);
+                frameLatencyWaitable = swapChain2->GetFrameLatencyWaitableObject();
+            }
+        }
+        if (const char *path = std::getenv("SKIKO_D3D_LOG")) {
+            if (FILE *f = fopen(path, "a")) {
+                fprintf(f, "buffers=%d maxLatency=%d waitable=%d tearing=%d cpuSync=%d transparency=%d committed=%s\n",
+                        buffersCount, maxFrameLatency, frameLatencyWaitable != NULL, tearing,
+                        std::getenv("SKIKO_D3D_NO_CPU_SYNC") == nullptr, (int) transparency,
+                        committedMode ? committedMode : "none");
+                fclose(f);
+            }
+        }
     }
 
 private:
@@ -89,7 +284,8 @@ private:
         swapChainDesc.SampleDesc.Count = 1;
         swapChainDesc.SampleDesc.Quality = 0;
         swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        swapChainDesc.BufferCount = BuffersCount;
+        swapChainDesc.BufferCount = buffersCount;
+        swapChainDesc.Flags = swapChainFlags;
         swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
         swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
@@ -120,7 +316,8 @@ private:
         swapChainDesc.SampleDesc.Count = 1;
         swapChainDesc.SampleDesc.Quality = 0;
         swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        swapChainDesc.BufferCount = BuffersCount;
+        swapChainDesc.BufferCount = buffersCount;
+        swapChainDesc.Flags = swapChainFlags;
         swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
         swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         return swapChainFactory4->CreateSwapChainForHwnd(queue.get(), hWnd, &swapChainDesc, nullptr, nullptr, swapChain1);
@@ -350,6 +547,14 @@ extern "C"
         d3dDevice->backendContext.fDevice = device;
         d3dDevice->backendContext.fQueue = queue;
         d3dDevice->backendContext.fProtectedContext = GrProtected::kNo;
+        if (committedMode && std::strcmp(committedMode, "discard") == 0) {
+            d3dDevice->backendContext.fMemoryAllocator = sk_make_sp<DiscardingAllocator>(
+                device, queue, GrD3DAMDMemoryAllocator::Make(adapter.get(), device.get()));
+        } else if (committedMode) {
+            const bool targetsOnly = std::strcmp(committedMode, "rt") == 0;
+            d3dDevice->backendContext.fMemoryAllocator = sk_make_sp<CommittedResourceAllocator>(
+                device, targetsOnly ? GrD3DAMDMemoryAllocator::Make(adapter.get(), device.get()) : nullptr);
+        }
 
         d3dDevice->device = device;
         d3dDevice->queue = queue;
@@ -383,7 +588,7 @@ extern "C"
         __try
         {
             DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
-            for (int i = 0; i < BuffersCount; i++)
+            for (int i = 0; i < d3dDevice->buffersCount; i++)
             {
                 d3dDevice->fenceValues[i] = 10000;
             }
@@ -442,7 +647,7 @@ extern "C"
     {
         __try {
             DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
-            for (int i = 0; i < BuffersCount; i++)
+            for (int i = 0; i < d3dDevice->buffersCount; i++)
             {
                 if (d3dDevice->fence->GetCompletedValue() < d3dDevice->fenceValues[i])
                 {
@@ -451,7 +656,7 @@ extern "C"
                 }
                 d3dDevice->buffers[i].reset(nullptr);
             }
-            d3dDevice->swapChain->ResizeBuffers(BuffersCount, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+            d3dDevice->swapChain->ResizeBuffers(d3dDevice->buffersCount, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, d3dDevice->swapChainFlags);
         }
         __except(EXCEPTION_EXECUTE_HANDLER) {
             auto code = GetExceptionCode();
@@ -467,7 +672,7 @@ extern "C"
             DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
             // 1 value in [Present(1, 0)] enables vblank wait so this is how vertical sync works in DirectX.
             const UINT64 fenceValue = d3dDevice->fenceValues[d3dDevice->bufferIndex];
-            d3dDevice->swapChain->Present((int)isVsyncEnabled, 0);
+            d3dDevice->swapChain->Present((int)isVsyncEnabled, !isVsyncEnabled && d3dDevice->tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
             d3dDevice->queue->Signal(d3dDevice->fence.get(), fenceValue);
         }
         __except(EXCEPTION_EXECUTE_HANDLER) {
@@ -488,6 +693,10 @@ extern "C"
     {
         __try {
             DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
+            if (d3dDevice->frameLatencyWaitable != NULL)
+            {
+                WaitForSingleObjectEx(d3dDevice->frameLatencyWaitable, 1000, TRUE);
+            }
             const UINT64 fenceValue = d3dDevice->fenceValues[d3dDevice->bufferIndex];
             d3dDevice->bufferIndex = d3dDevice->swapChain->GetCurrentBackBufferIndex();
             if (d3dDevice->fence->GetCompletedValue() < fenceValue)

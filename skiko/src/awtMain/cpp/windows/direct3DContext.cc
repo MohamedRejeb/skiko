@@ -8,6 +8,10 @@
 #include "ganesh/GrDirectContext.h"
 #include "SkSurface.h"
 #include "exceptions_handler.h"
+#include <cstdlib>
+
+// Experiment switch (exp/d3d-perf): submit without waiting for the GPU to finish the frame
+static const bool syncCpu = std::getenv("SKIKO_D3D_NO_CPU_SYNC") == nullptr;
 
 extern "C"
 {
@@ -19,7 +23,7 @@ extern "C"
             SkSurface *surface = fromJavaPointer<SkSurface *>(surfacePtr);
             GrDirectContext *context = fromJavaPointer<GrDirectContext *>(contextPtr);
             context->flush(surface, SkSurfaces::BackendSurfaceAccess::kPresent, GrFlushInfo());
-            context->submit(GrSyncCpu::kYes);
+            context->submit(syncCpu ? GrSyncCpu::kYes : GrSyncCpu::kNo);
         }
         __except(EXCEPTION_EXECUTE_HANDLER) {
             auto code = GetExceptionCode();

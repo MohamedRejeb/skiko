@@ -10,7 +10,7 @@ import org.jetbrains.skiko.redrawer.Direct3DRedrawer
 import java.lang.ref.Reference
 
 internal class Direct3DContextHandler(layer: SkiaLayer) : ContextBasedContextHandler(layer, "Direct3D") {
-    private val bufferCount = 2
+    private val bufferCount = if ((System.getenv("SKIKO_D3D_BUFFERS")?.toIntOrNull() ?: 2) >= 3) 3 else 2
     private var surfaces: Array<Surface?> = arrayOfNulls(bufferCount)
     private fun isSurfacesNull() = surfaces.all { it == null }
 
