@@ -33,22 +33,23 @@ public:
 };
 
 /**
- * Gives render targets and depth-stencil textures memory of their own and leaves everything else to Skia's allocator.
- * D3D12 requires such textures to be cleared or discarded before first use when they're placed in heap memory that
- * held something else, and Skia does neither: on Intel Iris Xe they then showed blocks of stale or black pixels
- * (squares, checkerboards) after a while of drawing. Committed resources start out initialized.
+ * Gives every texture memory of its own and leaves buffers to Skia's allocator. Textures placed in heap memory that
+ * held something else come out with stale blocks on Intel Iris Xe (squares, checkerboards), since Skia doesn't clear or
+ * discard them first: render targets after a while of drawing, and the masks Skia uploads into plain textures too,
+ * such as the rounded clips of dialogs and fields once scrolling has churned memory. Committed resources start out
+ * initialized; committing the many small buffers as well cost ~9 ms of ink latency, textures alone ~0.5 ms.
  */
-class RenderTargetAllocator : public GrD3DMemoryAllocator {
+class CommittedTextureAllocator : public GrD3DMemoryAllocator {
 public:
-    RenderTargetAllocator(gr_cp<ID3D12Device> device, sk_sp<GrD3DMemoryAllocator> placed)
+    CommittedTextureAllocator(gr_cp<ID3D12Device> device, sk_sp<GrD3DMemoryAllocator> placed)
         : device(std::move(device)), placed(std::move(placed)) {}
 
     gr_cp<ID3D12Resource> createResource(D3D12_HEAP_TYPE heapType, const D3D12_RESOURCE_DESC *desc,
                                          D3D12_RESOURCE_STATES initialState, sk_sp<GrD3DAlloc> *allocation,
                                          const D3D12_CLEAR_VALUE *clearValue) override {
-        const UINT targetFlags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         // Skia aliases the unordered-access copies it makes to generate mipmaps, which only works on placed memory
-        if ((desc->Flags & targetFlags) == 0 || (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0) {
+        if (desc->Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ||
+            (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0) {
             return placed->createResource(heapType, desc, initialState, allocation, clearValue);
         }
         D3D12_HEAP_PROPERTIES heapProperties = {};
@@ -398,7 +399,7 @@ extern "C"
         d3dDevice->backendContext.fQueue = queue;
         d3dDevice->backendContext.fProtectedContext = GrProtected::kNo;
         if (sk_sp<GrD3DMemoryAllocator> placed = GrD3DAMDMemoryAllocator::Make(adapter.get(), device.get())) {
-            d3dDevice->backendContext.fMemoryAllocator = sk_make_sp<RenderTargetAllocator>(device, std::move(placed));
+            d3dDevice->backendContext.fMemoryAllocator = sk_make_sp<CommittedTextureAllocator>(device, std::move(placed));
         }
 
         d3dDevice->device = device;
@@ -453,8 +454,8 @@ extern "C"
         DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
         GrD3DBackendContext backendContext = d3dDevice->backendContext;
         GrContextOptions options;
-        // Each cached path mask is a new texture placed in heap memory other resources just used, and on Intel Iris Xe
-        // those show stale black blocks too. Without the cache, Skia reuses a few masks, at no measurable cost.
+        // Each cached path mask is one more texture made (and, before textures were committed, one more that could show
+        // stale blocks). Without the cache, Skia reuses a few masks, at no measurable cost.
         options.fAllowPathMaskCaching = false;
         return toJavaPointer(GrDirectContexts::MakeD3D(backendContext, options).release());
     }
