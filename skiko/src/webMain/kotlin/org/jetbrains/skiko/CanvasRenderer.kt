@@ -15,9 +15,14 @@ import org.w3c.dom.HTMLCanvasElement
  */
 internal abstract class CanvasRenderer(
     private val contextPointer: NativePointer,
-    val width: Int,
-    val height: Int,
+    width: Int,
+    height: Int,
 ) {
+    var width: Int = width
+        private set
+    var height: Int = height
+        private set
+
     private val context: DirectContext
     private var surface: Surface? = null
     private var renderTarget: BackendRenderTarget? = null
@@ -32,6 +37,17 @@ internal abstract class CanvasRenderer(
     init {
         GL.makeContextCurrent(contextPointer)
         context = DirectContext.makeGL()
+        initCanvas()
+    }
+
+    /**
+     * Rebuilds the surface at a new size on the same GL context and [DirectContext], so the
+     * textures and caches made on that context stay usable.
+     */
+    fun resize(width: Int, height: Int) {
+        this.width = width
+        this.height = height
+        GL.makeContextCurrent(contextPointer)
         initCanvas()
     }
 

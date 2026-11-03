@@ -77,6 +77,13 @@ actual open class SkiaLayer {
      * Delegates rendering and events processing to [renderDelegate].
      */
     private fun attachTo(htmlCanvas: HTMLCanvasElement) {
+        // Attaching again to the same canvas (a resize) keeps its renderer: a new GL context
+        // handle and DirectContext would leave every texture made on the old one undrawable.
+        val current = state
+        if (current != null && this.htmlCanvas == htmlCanvas) {
+            current.resize(htmlCanvas.width, htmlCanvas.height)
+            return
+        }
         this.htmlCanvas = htmlCanvas
 
         state = object: CanvasRenderer(createWebGLContext(htmlCanvas), htmlCanvas.width, htmlCanvas.height) {
