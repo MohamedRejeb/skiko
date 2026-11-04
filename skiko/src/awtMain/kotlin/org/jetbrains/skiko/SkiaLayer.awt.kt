@@ -746,6 +746,21 @@ actual open class SkiaLayer internal constructor(
         scale = contentScale
     )
 
+    /**
+     * Whether to make a new Direct3D device after a failure while drawing, rather than move on to the next API. A driver
+     * reset or update takes the device away and a new one works, whereas nothing else shows on a window that has had a
+     * Direct3D swap chain: it stays frozen. So move on only when Direct3D keeps failing.
+     */
+    private fun shouldRecreateDirect3D(): Boolean {
+        if (renderApi != GraphicsApi.DIRECT3D) return false
+        val now = System.nanoTime()
+        direct3DFailures.removeAll { now - it > DIRECT3D_FAILURES_NANOS }
+        direct3DFailures += now
+        return direct3DFailures.size <= MAX_DIRECT3D_FAILURES
+    }
+
+    private val direct3DFailures = ArrayList<Long>()
+
     internal inline fun inDrawScope(body: LayerDrawScope.() -> Unit) {
         check(isEventDispatchThread()) { "Method should be called from AWT event dispatch thread" }
         check(!isDisposed) { "SkiaLayer is disposed" }
@@ -759,7 +774,7 @@ actual open class SkiaLayer internal constructor(
         } catch (e: RenderException) {
             if (!isDisposed) {
                 Logger.warn(e) { "Exception in draw scope" }
-                redrawerManager.findNextWorkingRenderApi()
+                redrawerManager.findNextWorkingRenderApi(recreation = shouldRecreateDirect3D())
                 redrawer?.renderImmediately()
             }
         }
@@ -851,6 +866,9 @@ internal fun defaultFPSCounter(
 //  - isn't obvious why 0.4/0.6 is used
 //  - increasing it by one, we avoid 1px white line, but we cut the content by 1px
 //  - it probably doesn't work correctly in a Panel content case - we don't need to adjust in this case
+private const val MAX_DIRECT3D_FAILURES = 3
+private const val DIRECT3D_FAILURES_NANOS = 60_000_000_000L
+
 /**
  * Increases the value of width/height by one if necessary,
  * to avoid 1px white line between Canvas and the bounding window.

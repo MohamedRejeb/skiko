@@ -128,7 +128,9 @@ internal class Direct3DRedrawer(
 
     fun makeSurface(context: Long, width: Int, height: Int, surfaceProps: SurfaceProps, index: Int): Surface {
         return interopScope {
-            Surface(makeDirectXSurface(device, context, width, height, toInterop(surfaceProps.packToIntArray()), index))
+            val surface = makeDirectXSurface(device, context, width, height, toInterop(surfaceProps.packToIntArray()), index)
+            if (surface == 0L) throw RenderException("No Direct3D surface for buffer $index")
+            Surface(surface)
         }
     }
 
@@ -138,7 +140,7 @@ internal class Direct3DRedrawer(
             isSwapChainInitialized = true
             true
         } else {
-            resizeBuffers(device, width, height)
+            checkDevice(resizeBuffers(device, width, height))
             false
         }
     }
@@ -147,7 +149,12 @@ internal class Direct3DRedrawer(
         if (!isSwapChainInitialized) {
             return
         }
-        swap(device, withVsync)
+        checkDevice(swap(device, withVsync))
+    }
+
+    /** [lostReason]: the native call's answer, 0 while the device is there. */
+    private fun checkDevice(lostReason: Int) {
+        if (lostReason != 0) throw RenderException("Direct3D device lost: 0x${lostReason.toUInt().toString(16)}")
     }
 
     fun getBufferIndex() = getBufferIndex(device)
@@ -160,8 +167,8 @@ internal class Direct3DRedrawer(
     private external fun createDirectXDevice(adapter: Long, contentHandle: Long, transparency: Boolean): Long
     private external fun makeDirectXContext(device: Long): Long
     private external fun makeDirectXSurface(device: Long, context: Long, width: Int, height: Int, surfacePropsIntArray: InteropPointer, index: Int): Long
-    private external fun resizeBuffers(device: Long, width: Int, height: Int)
-    private external fun swap(device: Long, isVsyncEnabled: Boolean)
+    private external fun resizeBuffers(device: Long, width: Int, height: Int): Int
+    private external fun swap(device: Long, isVsyncEnabled: Boolean): Int
     private external fun disposeDevice(device: Long)
     private external fun getBufferIndex(device: Long): Int
     private external fun initSwapChain(device: Long, width: Int, height: Int, transparency: Boolean)

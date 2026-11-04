@@ -322,6 +322,15 @@ extern "C"
         return env->CallBooleanMethod(redrawer, method, jname);
     }
 
+    // Why the device went when [result] says it did, for the redrawer to make a new one; else S_OK.
+    HRESULT deviceLostReason(DirectXDevice *d3dDevice, HRESULT result) {
+        if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) {
+            return S_OK;
+        }
+        HRESULT reason = d3dDevice->device->GetDeviceRemovedReason();
+        return FAILED(reason) ? reason : result;
+    }
+
     JNIEXPORT jlong JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_chooseAdapter(
             JNIEnv *env, jobject redrawer, jint adapterPriority) {
         gr_cp<IDXGIFactory4> deviceFactory;
@@ -472,7 +481,9 @@ extern "C"
                                       1,
                                       1,
                                       0);
-        d3dDevice->swapChain->GetBuffer(index, IID_PPV_ARGS(&d3dDevice->buffers[index]));
+        if (FAILED(d3dDevice->swapChain->GetBuffer(index, IID_PPV_ARGS(&d3dDevice->buffers[index])))) {
+            return 0;
+        }
 
         info.fResource = d3dDevice->buffers[index];
 
@@ -488,7 +499,7 @@ extern "C"
         return toJavaPointer(result);
     }
 
-    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_resizeBuffers(
+    JNIEXPORT jint JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_resizeBuffers(
         JNIEnv *env, jobject redrawer, jlong devicePtr, jint width, jint height)
     {
         __try {
@@ -502,15 +513,17 @@ extern "C"
                 }
                 d3dDevice->buffers[i].reset(nullptr);
             }
-            d3dDevice->swapChain->ResizeBuffers(BuffersCount, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+            HRESULT result = d3dDevice->swapChain->ResizeBuffers(BuffersCount, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+            return deviceLostReason(d3dDevice, result);
         }
         __except(EXCEPTION_EXECUTE_HANDLER) {
             auto code = GetExceptionCode();
             throwJavaRenderExceptionByExceptionCode(env, __FUNCTION__, code);
+            return S_OK;
         }
     }
 
-    JNIEXPORT void JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_swap(
+    JNIEXPORT jint JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_swap(
         JNIEnv *env, jobject redrawer, jlong devicePtr, jboolean isVsyncEnabled)
     {
         __try
@@ -518,12 +531,14 @@ extern "C"
             DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
             // 1 value in [Present(1, 0)] enables vblank wait so this is how vertical sync works in DirectX.
             const UINT64 fenceValue = d3dDevice->fenceValues[d3dDevice->bufferIndex];
-            d3dDevice->swapChain->Present((int)isVsyncEnabled, 0);
+            HRESULT result = d3dDevice->swapChain->Present((int)isVsyncEnabled, 0);
             d3dDevice->queue->Signal(d3dDevice->fence.get(), fenceValue);
+            return deviceLostReason(d3dDevice, result);
         }
         __except(EXCEPTION_EXECUTE_HANDLER) {
             auto code = GetExceptionCode();
             throwJavaRenderExceptionByExceptionCode(env, __FUNCTION__, code);
+            return S_OK;
         }
     }
 

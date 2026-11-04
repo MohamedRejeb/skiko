@@ -81,6 +81,8 @@ internal class Direct3DContextHandler(layer: SkiaLayer) : ContextBasedContextHan
     override fun disposeCanvas() {
         for (bufferIndex in 0 until bufferCount) {
             surfaces[bufferIndex]?.close()
+            // Resizing can fail before new ones are made, and closing one twice throws
+            surfaces[bufferIndex] = null
         }
     }
 
