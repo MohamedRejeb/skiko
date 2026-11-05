@@ -8,6 +8,7 @@ import org.jetbrains.skia.impl.InteropPointer
 import org.jetbrains.skia.impl.interopScope
 import org.jetbrains.skiko.*
 import org.jetbrains.skiko.context.Direct3DContextHandler
+import javax.swing.SwingUtilities
 
 internal class Direct3DRedrawer(
     private val layer: SkiaLayer,
@@ -41,6 +42,7 @@ internal class Direct3DRedrawer(
     val adapterMemorySize: Long
 
     init {
+        releaseRemovedDevices()
         val adapter = chooseAdapter(properties.adapterPriority.ordinal)
         if (adapter == 0L) {
             throw RenderException("Failed to choose DirectX12 adapter.")
@@ -69,9 +71,11 @@ internal class Direct3DRedrawer(
 
     init {
         onContextInit()
+        redrawers += this
     }
 
     override fun dispose() = synchronized(drawLock) {
+        redrawers -= this
         frameDispatcher.cancel()
         contextHandler.dispose()
         disposeDevice(device)
@@ -170,9 +174,26 @@ internal class Direct3DRedrawer(
     private external fun resizeBuffers(device: Long, width: Int, height: Int): Int
     private external fun swap(device: Long, isVsyncEnabled: Boolean): Int
     private external fun disposeDevice(device: Long)
+    private external fun isDeviceRemoved(device: Long): Boolean
     private external fun getBufferIndex(device: Long): Int
     private external fun initSwapChain(device: Long, width: Int, height: Int, transparency: Boolean)
     private external fun initFence(device: Long)
     private external fun getAdapterName(adapter: Long): String
     private external fun getAdapterMemorySize(adapter: Long): Long
+
+    private companion object {
+        // On the event dispatch thread only, where layers make and dispose their redrawers
+        private val redrawers = ArrayList<Direct3DRedrawer>()
+
+        /**
+         * A process has one Direct3D 12 device per adapter, which all its windows share. Once it's removed, by a driver
+         * reset say, no new one can be made until every window has let go of it, and a window only finds out when it
+         * next draws. So whichever makes a new device first takes the removed one from the others, and they follow.
+         */
+        private fun releaseRemovedDevices() {
+            val removed = redrawers.filter { it.isDeviceRemoved(it.device) }
+            removed.forEach { it.layer.releaseRedrawer() }
+            if (removed.isNotEmpty()) SwingUtilities.invokeLater { removed.forEach { it.layer.restoreRedrawer() } }
+        }
+    }
 }

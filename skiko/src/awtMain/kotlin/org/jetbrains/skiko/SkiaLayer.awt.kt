@@ -761,6 +761,18 @@ actual open class SkiaLayer internal constructor(
 
     private val direct3DFailures = ArrayList<Long>()
 
+    /** Gives up the redrawer and its Direct3D device, which another layer needs gone, until [restoreRedrawer]. */
+    internal fun releaseRedrawer() {
+        redrawer?.dispose()
+        redrawerManager.dispose()
+    }
+
+    internal fun restoreRedrawer() {
+        if (isDisposed || redrawer != null) return
+        redrawerManager.findNextWorkingRenderApi(recreation = true)
+        needRender()
+    }
+
     internal inline fun inDrawScope(body: LayerDrawScope.() -> Unit) {
         check(isEventDispatchThread()) { "Method should be called from AWT event dispatch thread" }
         check(!isDisposed) { "SkiaLayer is disposed" }

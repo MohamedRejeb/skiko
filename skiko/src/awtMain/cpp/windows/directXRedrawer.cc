@@ -549,6 +549,13 @@ extern "C"
         delete d3dDevice;
     }
 
+    JNIEXPORT jboolean JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_isDeviceRemoved(
+        JNIEnv *env, jobject redrawer, jlong devicePtr)
+    {
+        DirectXDevice *d3dDevice = fromJavaPointer<DirectXDevice *>(devicePtr);
+        return FAILED(d3dDevice->device->GetDeviceRemovedReason());
+    }
+
     JNIEXPORT jint JNICALL Java_org_jetbrains_skiko_redrawer_Direct3DRedrawer_getBufferIndex(
         JNIEnv *env, jobject redrawer, jlong devicePtr)
     {
